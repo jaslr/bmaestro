@@ -1,0 +1,25 @@
+{
+  "name": "bmaestro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cross-browser bookmark sync with cloud backend",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jaslr/bmaestro.git"
+  },
+  "author": "jaslr",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}
