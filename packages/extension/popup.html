@@ -2,31 +2,59 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>BMaestro</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="container">
+  <div class="popup">
     <h1>BMaestro</h1>
-    <div id="status" class="status">
-      <span class="indicator" id="indicator"></span>
-      <span id="statusText">Checking...</span>
-    </div>
-    <div class="stats">
-      <div class="stat">
-        <span class="label">Bookmarks</span>
-        <span class="value" id="bookmarkCount">-</span>
+
+    <div class="status-section">
+      <div class="status-row">
+        <span class="label">Status:</span>
+        <span id="status" class="value">Checking...</span>
       </div>
-      <div class="stat">
-        <span class="label">Last Sync</span>
-        <span class="value" id="lastSync">Never</span>
+      <div class="status-row">
+        <span class="label">Last sync:</span>
+        <span id="lastSync" class="value">Never</span>
+      </div>
+      <div class="status-row">
+        <span class="label">Pending:</span>
+        <span id="pending" class="value">0 operations</span>
       </div>
     </div>
-    <div class="actions">
-      <button id="syncNow">Sync Now</button>
-      <button id="openDashboard">Dashboard</button>
+
+    <div class="controls-section">
+      <button id="syncNow" class="btn primary">Sync Now</button>
+
+      <div class="interval-control">
+        <label for="interval">Auto-sync every:</label>
+        <select id="interval">
+          <option value="1">1 minute</option>
+          <option value="5" selected>5 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="60">1 hour</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="config-section" id="configSection">
+      <h2>Setup Required</h2>
+      <div class="input-group">
+        <label for="userId">User ID:</label>
+        <input type="text" id="userId" placeholder="your-user-id">
+      </div>
+      <div class="input-group">
+        <label for="syncSecret">Sync Secret:</label>
+        <input type="password" id="syncSecret" placeholder="your-sync-secret">
+      </div>
+      <button id="saveConfig" class="btn">Save Configuration</button>
+    </div>
+
+    <div class="footer">
+      <a href="https://bmaestro-dashboard.fly.dev" target="_blank">Open Dashboard</a>
     </div>
   </div>
-  <script src="popup.js" type="module"></script>
+  <script src="popup.js"></script>
 </body>
 </html>
