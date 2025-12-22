@@ -1,0 +1,40 @@
+export const CLOUD_CONFIG = {
+  syncUrl: 'https://bmaestro-sync.fly.dev/sync',
+  activityUrl: 'https://bmaestro-sync.fly.dev/activity',
+  defaultPollIntervalMinutes: 5,
+  minPollIntervalMinutes: 1,
+  maxPollIntervalMinutes: 60,
+};
+
+export interface StoredConfig {
+  syncSecret: string;
+  userId: string;
+  deviceId: string;
+  pollIntervalMinutes: number;
+  lastSyncVersion: number;
+  lastSyncTime: string | null;
+}
+
+export async function getConfig(): Promise<StoredConfig> {
+  const result = await chrome.storage.local.get([
+    'syncSecret',
+    'userId',
+    'deviceId',
+    'pollIntervalMinutes',
+    'lastSyncVersion',
+    'lastSyncTime',
+  ]);
+
+  return {
+    syncSecret: result.syncSecret || '',
+    userId: result.userId || '',
+    deviceId: result.deviceId || `device-${crypto.randomUUID().slice(0, 8)}`,
+    pollIntervalMinutes: result.pollIntervalMinutes || CLOUD_CONFIG.defaultPollIntervalMinutes,
+    lastSyncVersion: result.lastSyncVersion || 0,
+    lastSyncTime: result.lastSyncTime || null,
+  };
+}
+
+export async function saveConfig(config: Partial<StoredConfig>): Promise<void> {
+  await chrome.storage.local.set(config);
+}
