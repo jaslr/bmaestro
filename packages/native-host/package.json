@@ -4,7 +4,8 @@
   "type": "module",
   "bin": {
     "bmaestro-daemon": "./dist/daemon.js",
-    "bmaestro-shim": "./dist/shim.js"
+    "bmaestro-shim": "./dist/shim.js",
+    "bmaestro-install": "./dist/install.js"
   },
   "scripts": {
     "build": "tsc",
