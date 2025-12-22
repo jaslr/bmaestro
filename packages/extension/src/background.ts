@@ -1,5 +1,8 @@
-import { NativeClient } from './native/client.js';
-import { buildBookmarkTree, mapChromeBookmark } from './bookmarks/tree-builder.js';
+// Must be first import - sets up browser shims for Node.js globals
+import './shim.js';
+
+import { CloudClient } from './cloud/client.js';
+import { buildBookmarkTree } from './bookmarks/tree-builder.js';
 import type { BrowserType, SyncOperation } from '@bmaestro/shared/types';
 
 // Detect browser type
@@ -11,10 +14,10 @@ function detectBrowser(): BrowserType {
 }
 
 const browserType = detectBrowser();
-const client = new NativeClient(browserType);
+const client = new CloudClient(browserType);
 
 // Constants
-const CHECK_IN_INTERVAL_MS = 60_000;
+const ALARM_NAME = 'bmaestro-sync';
 const DEDUPE_TIMEOUT_MS = 2000;
 
 // Track recently synced IDs to prevent infinite loops
@@ -22,17 +25,42 @@ const recentlySyncedIds = new Set<string>();
 
 console.log(`[BMaestro] Starting on ${browserType}`);
 
-// Connect to native host
-try {
-  client.connect();
-} catch (err) {
-  console.error('[BMaestro] Failed to connect to native host:', err);
+// Initialize client
+client.initialize().then(() => {
+  console.log('[BMaestro] CloudClient initialized');
+  setupAlarm();
+});
+
+// Set up periodic sync alarm
+async function setupAlarm(): Promise<void> {
+  const intervalMinutes = await client.getPollInterval();
+
+  // Clear existing alarm
+  await chrome.alarms.clear(ALARM_NAME);
+
+  // Create new alarm
+  chrome.alarms.create(ALARM_NAME, {
+    delayInMinutes: 0.1, // Initial sync after 6 seconds
+    periodInMinutes: intervalMinutes,
+  });
+
+  console.log(`[BMaestro] Sync alarm set for every ${intervalMinutes} minutes`);
 }
 
-// Listen for incoming sync deltas
+// Handle alarm
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === ALARM_NAME) {
+    console.log('[BMaestro] Alarm triggered, syncing...');
+    client.sync().catch(err => {
+      console.error('[BMaestro] Sync failed:', err);
+    });
+  }
+});
+
+// Listen for incoming sync operations
 client.onSync((operations) => {
   console.log('[BMaestro] Received sync delta:', operations.length, 'operations');
-  applyOperations(operations as SyncOperation[]);
+  applyOperations(operations);
 });
 
 // Apply operations from other browsers
@@ -121,7 +149,7 @@ async function applyMove(op: SyncOperation): Promise<void> {
   });
 }
 
-// Listen for bookmark changes
+// Listen for bookmark changes and queue operations
 chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
   if (recentlySyncedIds.has(id)) {
     console.log('[BMaestro] Skipping echo for created bookmark:', id);
@@ -130,17 +158,22 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
 
   console.log('[BMaestro] Bookmark created:', id);
 
-  try {
-    await client.send('BOOKMARK_ADDED', {
+  client.queueOperation({
+    id: crypto.randomUUID(),
+    opType: 'ADD',
+    bookmarkId: id,
+    payload: {
       nativeId: id,
       parentNativeId: bookmark.parentId,
       title: bookmark.title,
       url: bookmark.url,
       index: bookmark.index,
-    });
-  } catch (err) {
-    console.error('[BMaestro] Failed to sync created bookmark:', err);
-  }
+    },
+    timestamp: new Date().toISOString(),
+  });
+
+  // Immediate sync for user actions
+  client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
 });
 
 chrome.bookmarks.onChanged.addListener(async (id, changes) => {
@@ -151,15 +184,19 @@ chrome.bookmarks.onChanged.addListener(async (id, changes) => {
 
   console.log('[BMaestro] Bookmark changed:', id);
 
-  try {
-    await client.send('BOOKMARK_UPDATED', {
+  client.queueOperation({
+    id: crypto.randomUUID(),
+    opType: 'UPDATE',
+    bookmarkId: id,
+    payload: {
       nativeId: id,
       title: changes.title,
       url: changes.url,
-    });
-  } catch (err) {
-    console.error('[BMaestro] Failed to sync changed bookmark:', err);
-  }
+    },
+    timestamp: new Date().toISOString(),
+  });
+
+  client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
 });
 
 chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
@@ -170,14 +207,18 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
 
   console.log('[BMaestro] Bookmark removed:', id);
 
-  try {
-    await client.send('BOOKMARK_DELETED', {
+  client.queueOperation({
+    id: crypto.randomUUID(),
+    opType: 'DELETE',
+    bookmarkId: id,
+    payload: {
       nativeId: id,
       parentNativeId: removeInfo.parentId,
-    });
-  } catch (err) {
-    console.error('[BMaestro] Failed to sync removed bookmark:', err);
-  }
+    },
+    timestamp: new Date().toISOString(),
+  });
+
+  client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
 });
 
 chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
@@ -188,25 +229,22 @@ chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
 
   console.log('[BMaestro] Bookmark moved:', id);
 
-  try {
-    await client.send('BOOKMARK_MOVED', {
+  client.queueOperation({
+    id: crypto.randomUUID(),
+    opType: 'MOVE',
+    bookmarkId: id,
+    payload: {
       nativeId: id,
       oldParentNativeId: moveInfo.oldParentId,
       newParentNativeId: moveInfo.parentId,
       oldIndex: moveInfo.oldIndex,
       newIndex: moveInfo.index,
-    });
-  } catch (err) {
-    console.error('[BMaestro] Failed to sync moved bookmark:', err);
-  }
-});
-
-// Check in periodically
-setInterval(() => {
-  client.checkInSync().catch((err) => {
-    console.error('[BMaestro] Check-in failed:', err);
+    },
+    timestamp: new Date().toISOString(),
   });
-}, CHECK_IN_INTERVAL_MS);
+
+  client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
+});
 
 // Export for popup access
 (globalThis as any).bmaestroClient = client;
