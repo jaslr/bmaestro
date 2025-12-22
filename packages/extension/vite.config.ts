@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
+import { copyFileSync, mkdirSync } from 'fs';
 
 export default defineConfig({
   build: {
@@ -37,4 +38,18 @@ export default defineConfig({
       },
     },
   },
+  plugins: [
+    {
+      name: 'copy-extension-files',
+      closeBundle() {
+        // Copy manifest and static files
+        copyFileSync('manifest.json', 'dist/manifest.json');
+        copyFileSync('popup.html', 'dist/popup.html');
+        copyFileSync('src/popup.css', 'dist/popup.css');
+
+        // Create icons directory
+        mkdirSync('dist/icons', { recursive: true });
+      },
+    },
+  ],
 });
