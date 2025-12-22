@@ -5,8 +5,12 @@
   "description": "Sync bookmarks across Chrome, Brave, and Edge browsers",
   "permissions": [
     "bookmarks",
-    "nativeMessaging",
-    "storage"
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://bmaestro-sync.fly.dev/*",
+    "https://bmaestro-pocketbase.fly.dev/*"
   ],
   "background": {
     "service_worker": "background.js",

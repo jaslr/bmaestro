@@ -30,6 +30,11 @@ export default defineConfig({
   },
   define: {
     'global': 'globalThis',
+    'process.env': '{}',
+    'process.browser': 'true',
+    'process.version': '"v20.0.0"',
+    'process.versions': '{}',
+    'process.platform': '"browser"',
   },
   optimizeDeps: {
     esbuildOptions: {

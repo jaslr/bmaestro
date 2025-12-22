@@ -1,0 +1,9 @@
+{
+  "name": "com.bmaestro.native_host",
+  "description": "BMaestro Native Host for bookmark sync",
+  "path": "C:\\bmaestro\\run-native-host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://npechgmhiicgleainnadlgcjafikakdb/"
+  ]
+}
