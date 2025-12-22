@@ -9,9 +9,18 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "build:shared": "npm run build -w packages/shared",
+    "build:sync-service": "npm run build -w packages/sync-service",
+    "build:native-host": "npm run build -w packages/native-host",
+    "build:extension": "npm run build -w packages/extension",
+    "build:dashboard": "npm run build -w packages/dashboard",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:sync-service": "npm run dev -w packages/sync-service",
+    "dev:dashboard": "npm run dev -w packages/dashboard",
+    "deploy:pocketbase": "cd packages/pocketbase && fly deploy",
+    "deploy:sync-service": "cd packages/sync-service && fly deploy"
   },
   "repository": {
     "type": "git",
