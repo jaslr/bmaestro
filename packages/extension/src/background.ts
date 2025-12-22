@@ -13,6 +13,13 @@ function detectBrowser(): BrowserType {
 const browserType = detectBrowser();
 const client = new NativeClient(browserType);
 
+// Constants
+const CHECK_IN_INTERVAL_MS = 60_000;
+const DEDUPE_TIMEOUT_MS = 2000;
+
+// Track recently synced IDs to prevent infinite loops
+const recentlySyncedIds = new Set<string>();
+
 console.log(`[BMaestro] Starting on ${browserType}`);
 
 // Connect to native host
@@ -32,6 +39,15 @@ client.onSync((operations) => {
 async function applyOperations(operations: SyncOperation[]): Promise<void> {
   for (const op of operations) {
     try {
+      // Extract nativeId from operation payload to prevent echo
+      const payload = op.payload as any;
+      const nativeId = payload.nativeId || payload.parentNativeId;
+
+      if (nativeId) {
+        recentlySyncedIds.add(nativeId);
+        setTimeout(() => recentlySyncedIds.delete(nativeId), DEDUPE_TIMEOUT_MS);
+      }
+
       switch (op.opType) {
         case 'ADD':
           await applyAdd(op);
@@ -106,11 +122,9 @@ async function applyMove(op: SyncOperation): Promise<void> {
 }
 
 // Listen for bookmark changes
-let ignoreNextChange = false;
-
 chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
-  if (ignoreNextChange) {
-    ignoreNextChange = false;
+  if (recentlySyncedIds.has(id)) {
+    console.log('[BMaestro] Skipping echo for created bookmark:', id);
     return;
   }
 
@@ -130,8 +144,8 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
 });
 
 chrome.bookmarks.onChanged.addListener(async (id, changes) => {
-  if (ignoreNextChange) {
-    ignoreNextChange = false;
+  if (recentlySyncedIds.has(id)) {
+    console.log('[BMaestro] Skipping echo for changed bookmark:', id);
     return;
   }
 
@@ -149,8 +163,8 @@ chrome.bookmarks.onChanged.addListener(async (id, changes) => {
 });
 
 chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
-  if (ignoreNextChange) {
-    ignoreNextChange = false;
+  if (recentlySyncedIds.has(id)) {
+    console.log('[BMaestro] Skipping echo for removed bookmark:', id);
     return;
   }
 
@@ -167,8 +181,8 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
 });
 
 chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
-  if (ignoreNextChange) {
-    ignoreNextChange = false;
+  if (recentlySyncedIds.has(id)) {
+    console.log('[BMaestro] Skipping echo for moved bookmark:', id);
     return;
   }
 
@@ -192,7 +206,7 @@ setInterval(() => {
   client.checkInSync().catch((err) => {
     console.error('[BMaestro] Check-in failed:', err);
   });
-}, 60000); // Every minute
+}, CHECK_IN_INTERVAL_MS);
 
 // Export for popup access
 (globalThis as any).bmaestroClient = client;
