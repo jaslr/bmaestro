@@ -18,4 +18,23 @@ export default defineConfig({
     minify: false,
     sourcemap: true,
   },
+  resolve: {
+    alias: {
+      crypto: 'crypto-browserify',
+      buffer: 'buffer',
+      stream: 'stream-browserify',
+      events: 'events',
+      vm: 'vm-browserify',
+    },
+  },
+  define: {
+    'global': 'globalThis',
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      define: {
+        global: 'globalThis',
+      },
+    },
+  },
 });
