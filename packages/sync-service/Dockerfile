@@ -2,8 +2,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copy root package files
+# Copy root package files and tsconfig
 COPY package*.json ./
+COPY tsconfig.json ./
 COPY packages/shared/package*.json ./packages/shared/
 COPY packages/sync-service/package*.json ./packages/sync-service/
 
