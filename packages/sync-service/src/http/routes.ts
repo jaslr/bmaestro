@@ -1,5 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { logActivity, getActivityLog } from './activity-logger.js';
+import { processSyncRequest } from '../sync/processor.js';
 
 function parseBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -68,25 +69,26 @@ export async function handleHttpRequest(
   if (path === '/sync' && method === 'POST') {
     const body = await parseBody(req);
     const deviceId = req.headers['x-device-id'] as string;
-    const browserType = req.headers['x-browser-type'] as string;
+    const browserType = req.headers['x-browser-type'] as 'chrome' | 'brave' | 'edge';
 
-    // Log sync start
-    await logActivity({
-      user_id: userId,
-      device_id: deviceId,
-      browser_type: browserType as any,
-      action: 'SYNC_STARTED',
-      timestamp: new Date().toISOString(),
-    });
+    if (!deviceId || !browserType) {
+      json(res, { error: 'Missing device-id or browser-type header' }, 400);
+      return true;
+    }
 
-    // TODO: Process incoming operations, return delta
-    // This will be implemented in Task 2.2
-
-    json(res, {
-      success: true,
-      operations: [],
-      lastSyncVersion: Date.now(),
-    });
+    try {
+      const result = await processSyncRequest({
+        userId,
+        deviceId,
+        browserType,
+        operations: body.operations || [],
+        lastSyncVersion: body.lastSyncVersion || 0,
+      });
+      json(res, result);
+    } catch (err) {
+      console.error('[Sync] Error processing sync:', err);
+      json(res, { error: 'Sync failed', details: String(err) }, 500);
+    }
     return true;
   }
 
