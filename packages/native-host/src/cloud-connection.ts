@@ -8,6 +8,7 @@ export interface CloudConnectionOptions {
   url: string;
   deviceId: string;
   userId: string;
+  secret?: string;
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
 }
@@ -44,7 +45,13 @@ export class CloudConnection extends EventEmitter {
     url.searchParams.set('deviceId', this.options.deviceId);
     url.searchParams.set('userId', this.options.userId);
 
-    this.ws = new WebSocket(url.toString());
+    // Pass secret in headers if provided
+    const headers: Record<string, string> = {};
+    if (this.options.secret) {
+      headers['x-sync-secret'] = this.options.secret;
+    }
+
+    this.ws = new WebSocket(url.toString(), { headers });
 
     this.ws.on('open', () => {
       this.reconnectAttempts = 0;

@@ -3,20 +3,41 @@ import { NativeMessaging } from './native-messaging.js';
 import { NativeRequest, NativeResponse, WSServerMessage } from '@bmaestro/shared/types';
 import { ChunkAccumulator, chunkMessage } from '@bmaestro/shared/protocol';
 import { randomUUID } from 'crypto';
+import { readFileSync, existsSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 
-const SYNC_SERVICE_URL = process.env.SYNC_SERVICE_URL ?? 'wss://bmaestro-sync.fly.dev/ws';
-const DEVICE_ID = process.env.DEVICE_ID ?? `device-${randomUUID().slice(0, 8)}`;
-const USER_ID = process.env.USER_ID ?? 'default-user';
+// Load config from ~/.bmaestro/config.json if it exists
+function loadConfig(): Record<string, string> {
+  const configPath = join(homedir(), '.bmaestro', 'config.json');
+  if (existsSync(configPath)) {
+    try {
+      return JSON.parse(readFileSync(configPath, 'utf-8'));
+    } catch (e) {
+      console.error('[Daemon] Failed to load config:', e);
+    }
+  }
+  return {};
+}
+
+const config = loadConfig();
+
+const SYNC_SERVICE_URL = process.env.SYNC_SERVICE_URL ?? config.syncServiceUrl ?? 'wss://bmaestro-sync.fly.dev/ws';
+const DEVICE_ID = process.env.DEVICE_ID ?? config.deviceId ?? `device-${randomUUID().slice(0, 8)}`;
+const USER_ID = process.env.USER_ID ?? config.userId ?? 'default-user';
+const SYNC_SECRET = process.env.SYNC_SECRET ?? config.syncSecret;
 
 console.log(`[Daemon] Starting BMaestro Native Host Daemon`);
 console.log(`[Daemon] Device ID: ${DEVICE_ID}`);
 console.log(`[Daemon] Sync Service: ${SYNC_SERVICE_URL}`);
+console.log(`[Daemon] Auth: ${SYNC_SECRET ? 'configured' : 'none'}`);
 
 // Initialize cloud connection
 const cloud = new CloudConnection({
   url: SYNC_SERVICE_URL,
   deviceId: DEVICE_ID,
   userId: USER_ID,
+  secret: SYNC_SECRET,
 });
 
 // Track connected extensions (browser -> NativeMessaging instance)

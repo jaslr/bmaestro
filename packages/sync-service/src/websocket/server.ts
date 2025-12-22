@@ -13,10 +13,34 @@ export function createWebSocketServer(options: WebSocketServerOptions): {
 } {
   const connectionManager = new ConnectionManager();
   const messageHandler = new MessageHandler(connectionManager);
+  const syncSecret = process.env.SYNC_SECRET;
 
   const wss = new WebSocketServer({
     server: options.httpServer,
     path: '/ws',
+    verifyClient: (info, callback) => {
+      // If no secret configured, allow all (dev mode)
+      if (!syncSecret) {
+        callback(true);
+        return;
+      }
+
+      // Check for secret in query params or authorization header
+      const url = new URL(info.req.url ?? '', `http://${info.req.headers.host}`);
+      const querySecret = url.searchParams.get('secret');
+      const headerSecret = info.req.headers['x-sync-secret'] as string | undefined;
+      const authHeader = info.req.headers.authorization;
+      const bearerSecret = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+
+      const providedSecret = querySecret ?? headerSecret ?? bearerSecret;
+
+      if (providedSecret === syncSecret) {
+        callback(true);
+      } else {
+        console.log('[WS] Connection rejected: invalid secret');
+        callback(false, 401, 'Unauthorized');
+      }
+    },
   });
 
   wss.on('connection', (socket: WebSocket, req) => {
@@ -25,7 +49,7 @@ export function createWebSocketServer(options: WebSocketServerOptions): {
     const deviceId = url.searchParams.get('deviceId') ?? `temp-${Date.now()}`;
     const userId = url.searchParams.get('userId') ?? 'anonymous';
 
-    console.log(`[WS] Connection from device: ${deviceId}`);
+    console.log(`[WS] Connection from device: ${deviceId} (authenticated)`);
 
     socket.on('message', (data) => {
       const message = data.toString();
