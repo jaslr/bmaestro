@@ -60,4 +60,31 @@ describe('ConnectionManager', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toBe('2:{"test": true}');
   });
+
+  it('updates last seen timestamp for a device', async () => {
+    const mockSocket = { readyState: 1 } as any;
+    manager.register('device-1', 'chrome', 'user-1', mockSocket);
+
+    const before = manager.getDevice('device-1')?.lastSeen.getTime();
+    await new Promise(r => setTimeout(r, 10)); // Small delay
+    manager.updateLastSeen('device-1');
+    const after = manager.getDevice('device-1')?.lastSeen.getTime();
+
+    expect(after).toBeGreaterThan(before!);
+  });
+
+  it('returns total connection count', () => {
+    const mockSocket = { readyState: 1 } as any;
+
+    expect(manager.getConnectionCount()).toBe(0);
+
+    manager.register('device-1', 'chrome', 'user-1', mockSocket);
+    expect(manager.getConnectionCount()).toBe(1);
+
+    manager.register('device-2', 'brave', 'user-1', mockSocket);
+    expect(manager.getConnectionCount()).toBe(2);
+
+    manager.disconnect('device-1');
+    expect(manager.getConnectionCount()).toBe(1);
+  });
 });
