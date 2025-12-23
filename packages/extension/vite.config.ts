@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
-import { copyFileSync, mkdirSync } from 'fs';
+import { copyFileSync, mkdirSync, existsSync } from 'fs';
 
 export default defineConfig({
   build: {
@@ -52,8 +52,16 @@ export default defineConfig({
         copyFileSync('popup.html', 'dist/popup.html');
         copyFileSync('src/popup.css', 'dist/popup.css');
 
-        // Create icons directory
+        // Create icons directory and copy icons
         mkdirSync('dist/icons', { recursive: true });
+        const iconSizes = ['16', '48', '128'];
+        for (const size of iconSizes) {
+          const src = `src/icons/icon${size}.png`;
+          const dest = `dist/icons/icon${size}.png`;
+          if (existsSync(src)) {
+            copyFileSync(src, dest);
+          }
+        }
       },
     },
   ],
