@@ -2,6 +2,7 @@ import { IncomingMessage, ServerResponse } from 'http';
 import { logActivity, getActivityLog } from './activity-logger.js';
 import { processSyncRequest } from '../sync/processor.js';
 import { handleExtensionDownload } from './extension-download.js';
+import { handleVersionCheck } from './version.js';
 
 function parseBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -62,6 +63,11 @@ export async function handleHttpRequest(
   // Extension download (no auth)
   if (path.startsWith('/download') || path === '/install') {
     return handleExtensionDownload(req, res);
+  }
+
+  // Version check (no auth)
+  if (path.startsWith('/version')) {
+    return handleVersionCheck(req, res);
   }
 
   // All other routes require auth

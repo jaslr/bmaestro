@@ -1,5 +1,12 @@
-import { CLOUD_CONFIG, getConfig, saveConfig, type StoredConfig } from './config.js';
+import { CLOUD_CONFIG, EXTENSION_VERSION, getConfig, saveConfig, type StoredConfig } from './config.js';
 import type { SyncOperation, BrowserType } from '@bmaestro/shared/types';
+
+export interface UpdateInfo {
+  updateAvailable: boolean;
+  currentVersion: string;
+  latestVersion: string;
+  downloadUrl: string;
+}
 
 export interface SyncResult {
   success: boolean;
@@ -156,5 +163,56 @@ export class CloudClient {
     );
     await saveConfig({ pollIntervalMinutes: clamped });
     if (this.config) this.config.pollIntervalMinutes = clamped;
+  }
+
+  // Check for extension updates
+  async checkForUpdate(): Promise<UpdateInfo> {
+    try {
+      const response = await fetch(CLOUD_CONFIG.versionUrl);
+      if (!response.ok) {
+        throw new Error(`Version check failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const latestVersion = data.version;
+      const currentVersion = EXTENSION_VERSION;
+
+      // Compare versions (simple string comparison works for semver)
+      const updateAvailable = this.compareVersions(latestVersion, currentVersion) > 0;
+
+      return {
+        updateAvailable,
+        currentVersion,
+        latestVersion,
+        downloadUrl: CLOUD_CONFIG.downloadUrl,
+      };
+    } catch (err) {
+      console.error('[Cloud] Version check error:', err);
+      return {
+        updateAvailable: false,
+        currentVersion: EXTENSION_VERSION,
+        latestVersion: EXTENSION_VERSION,
+        downloadUrl: CLOUD_CONFIG.downloadUrl,
+      };
+    }
+  }
+
+  // Compare semantic versions, returns: 1 if a > b, -1 if a < b, 0 if equal
+  private compareVersions(a: string, b: string): number {
+    const partsA = a.split('.').map(Number);
+    const partsB = b.split('.').map(Number);
+
+    for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+      const numA = partsA[i] || 0;
+      const numB = partsB[i] || 0;
+      if (numA > numB) return 1;
+      if (numA < numB) return -1;
+    }
+    return 0;
+  }
+
+  // Get current version
+  getCurrentVersion(): string {
+    return EXTENSION_VERSION;
   }
 }

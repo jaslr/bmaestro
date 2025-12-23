@@ -19,6 +19,10 @@ async function init(): Promise<void> {
   const client = bg.bmaestroClient;
 
   // UI elements
+  const versionEl = document.getElementById('version')!;
+  const updateBanner = document.getElementById('updateBanner')!;
+  const newVersionEl = document.getElementById('newVersion')!;
+  const updateLink = document.getElementById('updateLink') as HTMLAnchorElement;
   const statusEl = document.getElementById('status')!;
   const lastSyncEl = document.getElementById('lastSync')!;
   const pendingEl = document.getElementById('pending')!;
@@ -28,6 +32,20 @@ async function init(): Promise<void> {
   const userIdInput = document.getElementById('userId') as HTMLInputElement;
   const syncSecretInput = document.getElementById('syncSecret') as HTMLInputElement;
   const saveConfigBtn = document.getElementById('saveConfig') as HTMLButtonElement;
+
+  // Show current version
+  versionEl.textContent = `v${client.getCurrentVersion()}`;
+
+  // Check for updates
+  async function checkForUpdates(): Promise<void> {
+    const updateInfo = await client.checkForUpdate();
+    if (updateInfo.updateAvailable) {
+      newVersionEl.textContent = `v${updateInfo.latestVersion}`;
+      updateLink.href = updateInfo.downloadUrl;
+      updateBanner.classList.remove('hidden');
+    }
+  }
+  checkForUpdates();
 
   // Update status display
   function updateStatus(): void {
