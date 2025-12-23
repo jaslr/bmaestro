@@ -1,6 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { logActivity, getActivityLog } from './activity-logger.js';
 import { processSyncRequest } from '../sync/processor.js';
+import { handleExtensionDownload } from './extension-download.js';
 
 function parseBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -56,6 +57,11 @@ export async function handleHttpRequest(
   if (path === '/health') {
     json(res, { status: 'ok', timestamp: new Date().toISOString() });
     return true;
+  }
+
+  // Extension download (no auth)
+  if (path.startsWith('/download') || path === '/install') {
+    return handleExtensionDownload(req, res);
   }
 
   // All other routes require auth
