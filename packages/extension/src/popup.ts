@@ -278,17 +278,20 @@ async function init(): Promise<void> {
         cleanDuplicatesBtn.textContent = 'Cleaning...';
 
         try {
+          console.log('[Popup] Sending CLEAN_DUPLICATES message...');
           const response = await chrome.runtime.sendMessage({ type: 'CLEAN_DUPLICATES' });
           console.log('[Popup] Clean duplicates response:', response);
 
           if (response?.success) {
             showNotification(`Removed ${response.removed} duplicates, kept ${response.kept} bookmarks`, 'success');
           } else {
-            showNotification(response?.error || 'Cleanup failed', 'error');
+            const errorMsg = response?.error || 'Unknown error';
+            console.error('[Popup] Cleanup failed:', errorMsg);
+            showNotification(`Cleanup failed: ${errorMsg}`, 'error');
           }
         } catch (err: any) {
           console.error('[Popup] Clean duplicates error:', err);
-          showNotification(`Cleanup failed: ${err.message}`, 'error');
+          showNotification(`Cleanup failed: ${err.message || err}`, 'error');
         }
 
         cleanDuplicatesBtn.disabled = false;

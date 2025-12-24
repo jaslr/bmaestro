@@ -316,14 +316,18 @@ async function cleanDuplicates(): Promise<{ removed: number; kept: number }> {
 
 // Handle messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('[BMaestro] Received message:', message.type);
+
   if (message.type === 'CLEAN_DUPLICATES') {
+    console.log('[BMaestro] Starting clean duplicates handler...');
     cleanDuplicates()
       .then((result) => {
+        console.log('[BMaestro] Clean duplicates success:', result);
         sendResponse({ success: true, ...result });
       })
       .catch(err => {
-        console.error('[BMaestro] Clean duplicates failed:', err);
-        sendResponse({ success: false, error: String(err) });
+        console.error('[BMaestro] Clean duplicates failed:', err, err.stack);
+        sendResponse({ success: false, error: err.message || String(err) });
       });
     return true;
   }
