@@ -1,8 +1,12 @@
 import { createServer } from 'http';
 import { createWebSocketServer } from './websocket/server.js';
 import { handleHttpRequest } from './http/routes.js';
+import { initPocketBase } from './pocketbase.js';
 
 const PORT = parseInt(process.env.PORT ?? '8080', 10);
+
+// Initialize PocketBase auth before starting server
+await initPocketBase();
 
 const server = createServer(async (req, res) => {
   // Try HTTP routes first

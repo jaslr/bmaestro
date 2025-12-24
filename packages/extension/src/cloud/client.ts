@@ -64,11 +64,16 @@ export class CloudClient {
     this.syncHandlers.push(handler);
   }
 
+  // Refresh config from storage (call after user saves new credentials)
+  async refreshConfig(): Promise<void> {
+    this.config = await getConfig();
+    console.log('[Cloud] Config refreshed, configured:', this.isConfigured());
+  }
+
   // Perform sync with cloud
   async sync(): Promise<SyncResult> {
-    if (!this.config) {
-      await this.initialize();
-    }
+    // Always re-read config to pick up any changes from popup
+    await this.refreshConfig();
 
     if (!this.isConfigured()) {
       return {

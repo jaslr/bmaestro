@@ -246,6 +246,94 @@ chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
   client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
 });
 
+// Handle messages from popup
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'SYNC_NOW') {
+    client.sync()
+      .then((result) => {
+        sendResponse({ success: result.success, error: result.error });
+      })
+      .catch(err => {
+        console.error('[BMaestro] Sync failed:', err);
+        sendResponse({ success: false, error: String(err) });
+      });
+    return true; // Keep channel open for async response
+  }
+
+  if (message.type === 'FULL_SYNC') {
+    performFullSync()
+      .then((result) => {
+        sendResponse(result);
+      })
+      .catch(err => {
+        console.error('[BMaestro] Full sync failed:', err);
+        sendResponse({ success: false, error: String(err) });
+      });
+    return true;
+  }
+});
+
+// Full sync - export all bookmarks
+async function performFullSync(): Promise<{ success: boolean; count: number; error?: string }> {
+  console.log('[BMaestro] Starting full sync...');
+
+  try {
+    const tree = await chrome.bookmarks.getTree();
+    let count = 0;
+
+    // Recursively process all bookmarks
+    function processNode(node: chrome.bookmarks.BookmarkTreeNode): void {
+      // Skip root nodes
+      if (node.url) {
+        // It's a bookmark
+        client.queueOperation({
+          id: crypto.randomUUID(),
+          opType: 'ADD',
+          bookmarkId: node.id,
+          payload: {
+            nativeId: node.id,
+            parentNativeId: node.parentId,
+            title: node.title,
+            url: node.url,
+            index: node.index,
+          },
+          timestamp: new Date().toISOString(),
+        });
+        count++;
+      }
+
+      // Process children
+      if (node.children) {
+        for (const child of node.children) {
+          processNode(child);
+        }
+      }
+    }
+
+    for (const root of tree) {
+      processNode(root);
+    }
+
+    console.log(`[BMaestro] Queued ${count} bookmarks for sync`);
+
+    // Now sync
+    const result = await client.sync();
+
+    return {
+      success: result.success,
+      count,
+      error: result.error,
+    };
+  } catch (err) {
+    console.error('[BMaestro] Full sync error:', err);
+    return {
+      success: false,
+      count: 0,
+      error: String(err),
+    };
+  }
+}
+
 // Export for popup access
 (globalThis as any).bmaestroClient = client;
 (globalThis as any).bmaestroGetTree = buildBookmarkTree;

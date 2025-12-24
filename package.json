@@ -1,6 +1,6 @@
 {
   "name": "bmaestro",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Cross-browser bookmark sync with cloud backend",
   "type": "module",
@@ -20,7 +20,8 @@
     "dev:sync-service": "npm run dev -w packages/sync-service",
     "dev:dashboard": "npm run dev -w packages/dashboard",
     "deploy:pocketbase": "cd packages/pocketbase && fly deploy",
-    "deploy:sync-service": "cd packages/sync-service && fly deploy"
+    "deploy:sync-service": "cd packages/sync-service && fly deploy",
+    "extension:update": "node scripts/update-extension.js"
   },
   "repository": {
     "type": "git",

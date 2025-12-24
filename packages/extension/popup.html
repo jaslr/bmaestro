@@ -6,11 +6,29 @@
 </head>
 <body>
   <div class="popup">
-    <h1>BMaestro <span id="version" class="version"></span></h1>
+    <header class="header">
+      <h1>BMaestro <span id="version" class="version"></span></h1>
+      <div class="header-actions">
+        <button id="reloadExtension" class="icon-btn reload-btn hidden" title="Reload to apply update">↻</button>
+        <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
+      </div>
+    </header>
+
+    <div id="settingsMenu" class="settings-menu hidden">
+      <button id="logoutBtn" class="menu-item">Clear Config & Logout</button>
+    </div>
 
     <div id="updateBanner" class="update-banner hidden">
-      <span>Update available: <strong id="newVersion"></strong></span>
-      <a id="updateLink" href="#" target="_blank" class="update-link">Download</a>
+      <div class="update-info">
+        <span>Update available: <strong id="newVersion"></strong></span>
+      </div>
+      <div class="update-actions">
+        <button id="updateNow" class="update-btn">Update Now</button>
+      </div>
+    </div>
+
+    <div id="updateProgress" class="update-progress hidden">
+      <span id="updateStatus">Updating...</span>
     </div>
 
     <div class="status-section">
@@ -29,7 +47,8 @@
     </div>
 
     <div class="controls-section">
-      <button id="syncNow" class="btn primary">Sync Now</button>
+      <button id="syncNow" class="btn primary">Sync Changes</button>
+      <button id="fullSync" class="btn">Full Sync (Export All)</button>
 
       <div class="interval-control">
         <label for="interval">Auto-sync every:</label>
@@ -56,10 +75,28 @@
       <button id="saveConfig" class="btn">Save Configuration</button>
     </div>
 
+    <div id="autoUpdateSection" class="auto-update-section">
+      <div class="status-row">
+        <span class="label">Auto-update:</span>
+        <span id="autoUpdateStatus" class="value">Not configured</span>
+      </div>
+      <button id="setupAutoUpdate" class="btn small">Enable Auto-Update</button>
+    </div>
+
+    <div class="activity-section">
+      <div class="section-header">
+        <h2>Activity</h2>
+        <button id="refreshActivity" class="btn small">Refresh</button>
+      </div>
+      <div id="activityList" class="activity-list">
+        <div class="activity-empty">No activity yet</div>
+      </div>
+    </div>
+
     <div class="footer">
-      <a href="https://bmaestro-dashboard.fly.dev" target="_blank">Open Dashboard</a>
+      <a href="https://bmaestro-sync.fly.dev/health" target="_blank">Check Service Status</a>
     </div>
   </div>
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>

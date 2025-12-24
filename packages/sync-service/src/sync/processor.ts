@@ -1,8 +1,6 @@
-import PocketBase from 'pocketbase';
 import type { SyncOperation } from '@bmaestro/shared/types';
 import { logActivity } from '../http/activity-logger.js';
-
-const pb = new PocketBase(process.env.POCKETBASE_URL || 'https://bmaestro-pocketbase.fly.dev');
+import { pb } from '../pocketbase.js';
 
 export interface SyncRequest {
   userId: string;

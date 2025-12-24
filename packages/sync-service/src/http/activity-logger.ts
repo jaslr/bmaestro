@@ -1,6 +1,4 @@
-import PocketBase from 'pocketbase';
-
-const pb = new PocketBase(process.env.POCKETBASE_URL || 'https://bmaestro-pocketbase.fly.dev');
+import { pb } from '../pocketbase.js';
 
 export interface ActivityLogEntry {
   user_id: string;
