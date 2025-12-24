@@ -298,6 +298,15 @@ h2 {
   cursor: not-allowed;
 }
 
+.btn.warning {
+  background: var(--amber-dim);
+  color: var(--bg-base);
+}
+
+.btn.warning:hover {
+  background: var(--amber);
+}
+
 .btn.small {
   padding: 6px 10px;
   font-size: 10px;

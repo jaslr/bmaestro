@@ -255,8 +255,71 @@ chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
   client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
 });
 
+// Clean duplicate bookmarks
+async function cleanDuplicates(): Promise<{ removed: number; kept: number }> {
+  console.log('[BMaestro] Starting duplicate cleanup...');
+
+  const tree = await chrome.bookmarks.getTree();
+  const urlMap = new Map<string, chrome.bookmarks.BookmarkTreeNode[]>();
+
+  // Collect all bookmarks by URL
+  function collectBookmarks(node: chrome.bookmarks.BookmarkTreeNode): void {
+    if (node.url) {
+      const existing = urlMap.get(node.url) || [];
+      existing.push(node);
+      urlMap.set(node.url, existing);
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        collectBookmarks(child);
+      }
+    }
+  }
+
+  for (const root of tree) {
+    collectBookmarks(root);
+  }
+
+  // Find and remove duplicates (keep the first one)
+  let removed = 0;
+  let kept = 0;
+
+  for (const [url, bookmarks] of urlMap) {
+    if (bookmarks.length > 1) {
+      // Keep the first one, remove the rest
+      kept++;
+      for (let i = 1; i < bookmarks.length; i++) {
+        try {
+          await chrome.bookmarks.remove(bookmarks[i].id);
+          removed++;
+          console.log('[BMaestro] Removed duplicate:', url);
+        } catch (err) {
+          console.error('[BMaestro] Failed to remove duplicate:', bookmarks[i].id, err);
+        }
+      }
+    } else {
+      kept++;
+    }
+  }
+
+  console.log(`[BMaestro] Cleanup complete: kept ${kept}, removed ${removed} duplicates`);
+  return { removed, kept };
+}
+
 // Handle messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'CLEAN_DUPLICATES') {
+    cleanDuplicates()
+      .then((result) => {
+        sendResponse({ success: true, ...result });
+      })
+      .catch(err => {
+        console.error('[BMaestro] Clean duplicates failed:', err);
+        sendResponse({ success: false, error: String(err) });
+      });
+    return true;
+  }
+
   if (message.type === 'SYNC_NOW') {
     client.sync()
       .then((result) => {

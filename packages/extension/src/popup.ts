@@ -264,6 +264,38 @@ async function init(): Promise<void> {
       });
     }
 
+    // Clean duplicates button
+    const cleanDuplicatesBtn = document.getElementById('cleanDuplicates') as HTMLButtonElement | null;
+    if (cleanDuplicatesBtn) {
+      cleanDuplicatesBtn.addEventListener('click', async () => {
+        console.log('[Popup] Clean duplicates clicked');
+
+        if (!confirm('This will remove duplicate bookmarks (keeping one copy of each URL). Continue?')) {
+          return;
+        }
+
+        cleanDuplicatesBtn.disabled = true;
+        cleanDuplicatesBtn.textContent = 'Cleaning...';
+
+        try {
+          const response = await chrome.runtime.sendMessage({ type: 'CLEAN_DUPLICATES' });
+          console.log('[Popup] Clean duplicates response:', response);
+
+          if (response?.success) {
+            showNotification(`Removed ${response.removed} duplicates, kept ${response.kept} bookmarks`, 'success');
+          } else {
+            showNotification(response?.error || 'Cleanup failed', 'error');
+          }
+        } catch (err: any) {
+          console.error('[Popup] Clean duplicates error:', err);
+          showNotification(`Cleanup failed: ${err.message}`, 'error');
+        }
+
+        cleanDuplicatesBtn.disabled = false;
+        cleanDuplicatesBtn.textContent = 'Clean Duplicates';
+      });
+    }
+
     // Interval change
     if (intervalSelect) {
       intervalSelect.addEventListener('change', async () => {
