@@ -6,7 +6,8 @@
   "permissions": [
     "bookmarks",
     "storage",
-    "alarms"
+    "alarms",
+    "downloads"
   ],
   "host_permissions": [
     "https://bmaestro-sync.fly.dev/*",

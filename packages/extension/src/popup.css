@@ -385,12 +385,6 @@ h2 {
   color: var(--text-dim);
 }
 
-/* Auto-Update Section */
-.auto-update-section {
-  background: var(--bg-elevated);
-  padding: 12px;
-  margin-bottom: 12px;
-}
 
 /* Activity Section */
 .activity-section {

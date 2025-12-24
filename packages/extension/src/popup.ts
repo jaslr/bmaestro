@@ -1,10 +1,5 @@
 // packages/extension/src/popup.ts
-import {
-  checkForUpdate,
-  setupAutoUpdate,
-  isAutoUpdateConfigured,
-  downloadAndApplyUpdate,
-} from './updater.js';
+import { checkForUpdate, downloadUpdate } from './updater.js';
 import { EXTENSION_VERSION } from './cloud/config.js';
 
 // Show notification in the popup
@@ -34,9 +29,7 @@ async function init(): Promise<void> {
     const updateBanner = document.getElementById('updateBanner');
     const newVersionEl = document.getElementById('newVersion');
     const updateNowBtn = document.getElementById('updateNow') as HTMLButtonElement | null;
-    const updateProgress = document.getElementById('updateProgress');
-    const updateStatusEl = document.getElementById('updateStatus');
-    const statusEl = document.getElementById('status');
+        const statusEl = document.getElementById('status');
     const lastSyncEl = document.getElementById('lastSync');
     const pendingEl = document.getElementById('pending');
     const syncNowBtn = document.getElementById('syncNow') as HTMLButtonElement | null;
@@ -45,9 +38,7 @@ async function init(): Promise<void> {
     const userIdInput = document.getElementById('userId') as HTMLInputElement | null;
     const syncSecretInput = document.getElementById('syncSecret') as HTMLInputElement | null;
     const saveConfigBtn = document.getElementById('saveConfig') as HTMLButtonElement | null;
-    const autoUpdateStatusEl = document.getElementById('autoUpdateStatus');
-    const setupAutoUpdateBtn = document.getElementById('setupAutoUpdate') as HTMLButtonElement | null;
-
+    
     // Show current version
     if (versionEl) {
       versionEl.textContent = `v${EXTENSION_VERSION}`;
@@ -292,75 +283,21 @@ async function init(): Promise<void> {
       });
     }
 
-    // Setup auto-update button
-    if (setupAutoUpdateBtn && autoUpdateStatusEl) {
-      // Check current status
-      try {
-        const configured = await isAutoUpdateConfigured();
-        if (configured) {
-          autoUpdateStatusEl.textContent = 'Enabled';
-          autoUpdateStatusEl.className = 'value connected';
-          setupAutoUpdateBtn.textContent = 'Reconfigure';
-        } else {
-          autoUpdateStatusEl.textContent = 'Not configured';
-          autoUpdateStatusEl.className = 'value disconnected';
-          setupAutoUpdateBtn.textContent = 'Enable Auto-Update';
-        }
-      } catch (err) {
-        console.error('[Popup] Check auto-update status error:', err);
-        autoUpdateStatusEl.textContent = 'Unknown';
-      }
-
-      setupAutoUpdateBtn.addEventListener('click', async () => {
-        console.log('[Popup] Setup auto-update clicked');
-        try {
-          setupAutoUpdateBtn.disabled = true;
-          setupAutoUpdateBtn.textContent = 'Select folder...';
-
-          const success = await setupAutoUpdate();
-          if (success) {
-            autoUpdateStatusEl.textContent = 'Enabled';
-            autoUpdateStatusEl.className = 'value connected';
-            setupAutoUpdateBtn.textContent = 'Reconfigure';
-            showNotification('Auto-update enabled!', 'success');
-          } else {
-            setupAutoUpdateBtn.textContent = 'Enable Auto-Update';
-          }
-        } catch (err: any) {
-          console.error('[Popup] Setup auto-update error:', err);
-          showNotification(err.message || 'Setup failed', 'error');
-          setupAutoUpdateBtn.textContent = 'Enable Auto-Update';
-        } finally {
-          setupAutoUpdateBtn.disabled = false;
-        }
-      });
-    }
-
-    // Update now button
-    if (updateNowBtn && updateBanner && updateProgress && updateStatusEl) {
+    // Update now button - downloads update zip
+    if (updateNowBtn && updateBanner) {
       updateNowBtn.addEventListener('click', async () => {
         console.log('[Popup] Update now clicked');
         try {
-          const configured = await isAutoUpdateConfigured();
-          if (!configured) {
-            showNotification('Please enable auto-update first by selecting your extension folder.', 'error');
-            if (setupAutoUpdateBtn) setupAutoUpdateBtn.click();
-            return;
-          }
-
-          updateBanner.classList.add('hidden');
-          updateProgress.classList.remove('hidden');
-
-          await downloadAndApplyUpdate((status) => {
-            updateStatusEl.textContent = status;
-          });
-
-          // Extension will reload, so this won't be reached
+          updateNowBtn.disabled = true;
+          updateNowBtn.textContent = 'Downloading...';
+          await downloadUpdate();
+          showNotification('Download started - extract zip and reload extension', 'success');
         } catch (err: any) {
           console.error('[Popup] Update error:', err);
-          updateProgress.classList.add('hidden');
-          updateBanner.classList.remove('hidden');
-          showNotification(`Update failed: ${err.message}`, 'error');
+          showNotification(`Download failed: ${err.message}`, 'error');
+        } finally {
+          updateNowBtn.disabled = false;
+          updateNowBtn.textContent = 'Download Update';
         }
       });
     }
