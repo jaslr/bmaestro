@@ -104,6 +104,15 @@ async function applyAdd(op: SyncOperation): Promise<void> {
     index?: number;
   };
 
+  // Skip if no URL (folder) or check for existing bookmark with same URL
+  if (payload.url) {
+    const existing = await chrome.bookmarks.search({ url: payload.url });
+    if (existing.length > 0) {
+      console.log('[BMaestro] Skipping duplicate bookmark:', payload.url);
+      return;
+    }
+  }
+
   await chrome.bookmarks.create({
     parentId: payload.parentNativeId,
     title: payload.title,
