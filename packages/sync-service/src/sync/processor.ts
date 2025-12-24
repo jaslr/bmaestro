@@ -89,8 +89,8 @@ export async function processSyncRequest(req: SyncRequest): Promise<SyncResponse
       payload: op.payload,
       version: newVersion,
       timestamp: typeof op.timestamp === 'number'
-        ? new Date(op.timestamp).toISOString()
-        : op.timestamp,
+        ? op.timestamp
+        : new Date(op.timestamp as string).getTime(),
     });
 
     // Log activity
