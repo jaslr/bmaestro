@@ -23,6 +23,9 @@ const DEDUPE_TIMEOUT_MS = 2000;
 // Track recently synced IDs to prevent infinite loops
 const recentlySyncedIds = new Set<string>();
 
+// Flag to prevent cleanup deletions from triggering sync
+let isCleaningDuplicates = false;
+
 console.log(`[BMaestro] Starting on ${browserType}`);
 
 // Initialize client
@@ -209,8 +212,8 @@ chrome.bookmarks.onChanged.addListener(async (id, changes) => {
 });
 
 chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
-  if (recentlySyncedIds.has(id)) {
-    console.log('[BMaestro] Skipping echo for removed bookmark:', id);
+  if (recentlySyncedIds.has(id) || isCleaningDuplicates) {
+    console.log('[BMaestro] Skipping sync for removed bookmark:', id);
     return;
   }
 
@@ -258,52 +261,57 @@ chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
 // Clean duplicate bookmarks
 async function cleanDuplicates(): Promise<{ removed: number; kept: number }> {
   console.log('[BMaestro] Starting duplicate cleanup...');
+  isCleaningDuplicates = true;
 
-  const tree = await chrome.bookmarks.getTree();
-  const urlMap = new Map<string, chrome.bookmarks.BookmarkTreeNode[]>();
+  try {
+    const tree = await chrome.bookmarks.getTree();
+    const urlMap = new Map<string, chrome.bookmarks.BookmarkTreeNode[]>();
 
-  // Collect all bookmarks by URL
-  function collectBookmarks(node: chrome.bookmarks.BookmarkTreeNode): void {
-    if (node.url) {
-      const existing = urlMap.get(node.url) || [];
-      existing.push(node);
-      urlMap.set(node.url, existing);
-    }
-    if (node.children) {
-      for (const child of node.children) {
-        collectBookmarks(child);
+    // Collect all bookmarks by URL
+    function collectBookmarks(node: chrome.bookmarks.BookmarkTreeNode): void {
+      if (node.url) {
+        const existing = urlMap.get(node.url) || [];
+        existing.push(node);
+        urlMap.set(node.url, existing);
       }
-    }
-  }
-
-  for (const root of tree) {
-    collectBookmarks(root);
-  }
-
-  // Find and remove duplicates (keep the first one)
-  let removed = 0;
-  let kept = 0;
-
-  for (const [url, bookmarks] of urlMap) {
-    if (bookmarks.length > 1) {
-      // Keep the first one, remove the rest
-      kept++;
-      for (let i = 1; i < bookmarks.length; i++) {
-        try {
-          await chrome.bookmarks.remove(bookmarks[i].id);
-          removed++;
-          console.log('[BMaestro] Removed duplicate:', url);
-        } catch (err) {
-          console.error('[BMaestro] Failed to remove duplicate:', bookmarks[i].id, err);
+      if (node.children) {
+        for (const child of node.children) {
+          collectBookmarks(child);
         }
       }
-    } else {
-      kept++;
     }
-  }
 
-  console.log(`[BMaestro] Cleanup complete: kept ${kept}, removed ${removed} duplicates`);
-  return { removed, kept };
+    for (const root of tree) {
+      collectBookmarks(root);
+    }
+
+    // Find and remove duplicates (keep the first one)
+    let removed = 0;
+    let kept = 0;
+
+    for (const [url, bookmarks] of urlMap) {
+      if (bookmarks.length > 1) {
+        // Keep the first one, remove the rest
+        kept++;
+        for (let i = 1; i < bookmarks.length; i++) {
+          try {
+            await chrome.bookmarks.remove(bookmarks[i].id);
+            removed++;
+            console.log('[BMaestro] Removed duplicate:', url);
+          } catch (err) {
+            console.error('[BMaestro] Failed to remove duplicate:', bookmarks[i].id, err);
+          }
+        }
+      } else {
+        kept++;
+      }
+    }
+
+    console.log(`[BMaestro] Cleanup complete: kept ${kept}, removed ${removed} duplicates`);
+    return { removed, kept };
+  } finally {
+    isCleaningDuplicates = false;
+  }
 }
 
 // Handle messages from popup
