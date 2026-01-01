@@ -168,11 +168,25 @@ async function init(): Promise<void> {
                   </span>
                 </div>
                 <div class="moderation-btns">
-                  <button class="btn small" onclick="handleModeration('${item.id}', 'accept')">Accept</button>
-                  <button class="btn small warning" onclick="handleModeration('${item.id}', 'reject')">Reject</button>
+                  <button class="btn small mod-accept" data-id="${item.id}">Accept</button>
+                  <button class="btn small warning mod-reject" data-id="${item.id}">Reject</button>
                 </div>
               </div>
             `).join('');
+
+            // Attach event listeners (CSP-compliant)
+            moderationList.querySelectorAll('.mod-accept').forEach(btn => {
+              btn.addEventListener('click', () => {
+                const id = (btn as HTMLElement).dataset.id!;
+                handleModeration(id, 'accept');
+              });
+            });
+            moderationList.querySelectorAll('.mod-reject').forEach(btn => {
+              btn.addEventListener('click', () => {
+                const id = (btn as HTMLElement).dataset.id!;
+                handleModeration(id, 'reject');
+              });
+            });
           }
         }
 
@@ -207,8 +221,8 @@ async function init(): Promise<void> {
       }
     }
 
-    // Global handler for moderation buttons
-    (window as any).handleModeration = async (id: string, action: 'accept' | 'reject') => {
+    // Handler for moderation buttons
+    async function handleModeration(id: string, action: 'accept' | 'reject') {
       try {
         const response = await fetch(`https://bmaestro-sync.fly.dev/moderation/${id}/${action}`, {
           method: 'POST',
@@ -232,7 +246,7 @@ async function init(): Promise<void> {
       } catch (err: any) {
         showNotification(`Error: ${err.message}`, 'error');
       }
-    };
+    }
 
     // Accept all / Reject all
     const acceptAllBtn = document.getElementById('acceptAll') as HTMLButtonElement | null;
