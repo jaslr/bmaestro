@@ -98,6 +98,144 @@ if (-not $isUpdate) {
 Read-Host "Press Enter to exit"
 `;
 
+// Auto-updater script - runs in background, checks for updates
+const UPDATER_SCRIPT = `# BMaestro Auto-Updater Service
+# Runs in background, checks for updates, auto-downloads new versions
+
+$ErrorActionPreference = "Stop"
+$InstallDir = "$env:LOCALAPPDATA\\BMaestro\\extension"
+$VersionUrl = "https://bmaestro-sync.fly.dev/version"
+$DownloadUrl = "https://bmaestro-sync.fly.dev/download/extension.zip"
+$TempZip = "$env:TEMP\\bmaestro-update.zip"
+$IntervalMinutes = 30
+
+function Get-LocalVersion {
+    $manifestPath = "$InstallDir\\manifest.json"
+    if (Test-Path $manifestPath) {
+        $manifest = Get-Content $manifestPath | ConvertFrom-Json
+        return $manifest.version
+    }
+    return "0.0.0"
+}
+
+function Get-RemoteVersion {
+    try {
+        $response = Invoke-RestMethod -Uri $VersionUrl -UseBasicParsing
+        return $response.version
+    } catch {
+        return $null
+    }
+}
+
+function Compare-Versions {
+    param($local, $remote)
+    $localParts = $local.Split('.') | ForEach-Object { [int]$_ }
+    $remoteParts = $remote.Split('.') | ForEach-Object { [int]$_ }
+    for ($i = 0; $i -lt [Math]::Max($localParts.Count, $remoteParts.Count); $i++) {
+        $l = if ($i -lt $localParts.Count) { $localParts[$i] } else { 0 }
+        $r = if ($i -lt $remoteParts.Count) { $remoteParts[$i] } else { 0 }
+        if ($r -gt $l) { return $true }
+        if ($l -gt $r) { return $false }
+    }
+    return $false
+}
+
+function Update-Extension {
+    try {
+        Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip -UseBasicParsing
+        if (-not (Test-Path $InstallDir)) {
+            New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        }
+        Get-ChildItem -Path $InstallDir | Remove-Item -Recurse -Force
+        Expand-Archive -Path $TempZip -DestinationPath $InstallDir -Force
+        Remove-Item $TempZip -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# Initial check
+$localVersion = Get-LocalVersion
+if ($localVersion -eq "0.0.0") {
+    Update-Extension
+}
+
+# Update loop
+while ($true) {
+    $localVersion = Get-LocalVersion
+    $remoteVersion = Get-RemoteVersion
+    if ($remoteVersion -and (Compare-Versions $localVersion $remoteVersion)) {
+        Update-Extension
+    }
+    Start-Sleep -Seconds ($IntervalMinutes * 60)
+}
+`;
+
+// Complete setup script - installs extension + auto-updater
+const SETUP_SCRIPT = `# BMaestro Complete Setup
+# Downloads extension + installs auto-updater as scheduled task
+
+$ErrorActionPreference = "Stop"
+$InstallDir = "$env:LOCALAPPDATA\\BMaestro"
+$ExtensionDir = "$InstallDir\\extension"
+$UpdaterScript = "$InstallDir\\bmaestro-updater.ps1"
+$DownloadUrl = "https://bmaestro-sync.fly.dev/download/extension.zip"
+$UpdaterUrl = "https://bmaestro-sync.fly.dev/download/updater.ps1"
+$TempZip = "$env:TEMP\\bmaestro-extension.zip"
+$TaskName = "BMaestro Auto-Updater"
+
+Write-Host ""
+Write-Host "BMaestro Setup" -ForegroundColor Cyan
+Write-Host "==============" -ForegroundColor Cyan
+Write-Host ""
+
+# Create directories
+New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+New-Item -ItemType Directory -Path $ExtensionDir -Force | Out-Null
+
+# Download extension
+Write-Host "Downloading extension..." -ForegroundColor Gray
+Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip -UseBasicParsing
+
+# Extract
+Write-Host "Installing..." -ForegroundColor Gray
+Get-ChildItem -Path $ExtensionDir -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+Expand-Archive -Path $TempZip -DestinationPath $ExtensionDir -Force
+Remove-Item $TempZip -Force
+
+# Get version
+$manifest = Get-Content "$ExtensionDir\\manifest.json" | ConvertFrom-Json
+$version = $manifest.version
+
+# Download and install updater
+Write-Host "Setting up auto-updater..." -ForegroundColor Gray
+Invoke-WebRequest -Uri $UpdaterUrl -OutFile $UpdaterScript -UseBasicParsing
+
+# Create scheduled task
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$UpdaterScript\`""
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+
+Write-Host ""
+Write-Host "SUCCESS! BMaestro v$version installed" -ForegroundColor Green
+Write-Host ""
+Write-Host "Extension folder: $ExtensionDir" -ForegroundColor Cyan
+Write-Host "Auto-updater: Running (checks every 30 min)" -ForegroundColor Green
+Write-Host ""
+Write-Host "NEXT: Load extension in each browser" -ForegroundColor Yellow
+Write-Host "  1. Go to chrome://extensions (or brave:// or edge://)" -ForegroundColor White
+Write-Host "  2. Enable Developer mode (top-right)" -ForegroundColor White
+Write-Host "  3. Click Load unpacked" -ForegroundColor White
+Write-Host "  4. Select: $ExtensionDir" -ForegroundColor Cyan
+Write-Host ""
+
+Read-Host "Press Enter to exit"
+`;
+
 export function handleExtensionDownload(
   req: IncomingMessage,
   res: ServerResponse
@@ -142,13 +280,33 @@ export function handleExtensionDownload(
     return true;
   }
 
-  // Download PowerShell installer
+  // Download PowerShell installer (legacy - redirects to setup)
   if (url === '/download/installer.ps1') {
     res.writeHead(200, {
       'Content-Type': 'text/plain; charset=utf-8',
       'Content-Disposition': 'attachment; filename="bmaestro-install.ps1"',
     });
     res.end(INSTALLER_SCRIPT);
+    return true;
+  }
+
+  // Download auto-updater script
+  if (url === '/download/updater.ps1') {
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="bmaestro-updater.ps1"',
+    });
+    res.end(UPDATER_SCRIPT);
+    return true;
+  }
+
+  // Download complete setup script (extension + auto-updater)
+  if (url === '/download/setup.ps1') {
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="bmaestro-setup.ps1"',
+    });
+    res.end(SETUP_SCRIPT);
     return true;
   }
 
@@ -203,17 +361,22 @@ export function handleExtensionDownload(
       </div>
     </div>
 
-    <h2>Install</h2>
+    <h2>Install (Windows)</h2>
 
     <div class="method">
-      <h3>Windows - One Command Install</h3>
+      <h3>One Command Setup</h3>
       <p>Open PowerShell and run:</p>
-      <div class="cmd">powershell -ExecutionPolicy Bypass -c "irm https://bmaestro-sync.fly.dev/download/installer.ps1 | iex"</div>
-      <p style="color: #666; font-size: 14px; margin-bottom: 0;">This downloads to <code>%LOCALAPPDATA%\\BMaestro\\extension</code></p>
+      <div class="cmd">powershell -ExecutionPolicy Bypass -c "irm https://bmaestro-sync.fly.dev/download/setup.ps1 | iex"</div>
+      <p style="margin: 15px 0 0 0;">This will:</p>
+      <ul style="margin: 5px 0;">
+        <li>Download extension to <code>%LOCALAPPDATA%\\BMaestro\\extension</code></li>
+        <li>Install background auto-updater (checks every 30 min)</li>
+        <li>Start auto-updater immediately</li>
+      </ul>
     </div>
 
     <div class="method secondary">
-      <h3>Any OS - Manual Install</h3>
+      <h3>Manual Install (Any OS)</h3>
       <a href="/download/extension.zip" class="btn btn-secondary btn-small">Download ZIP</a>
       <ol style="margin-bottom: 0;">
         <li>Extract to a permanent folder</li>
@@ -223,17 +386,13 @@ export function handleExtensionDownload(
       </ol>
     </div>
 
-    <h2>Updates</h2>
-    <p>When an update is available, a banner appears in the extension popup:</p>
-    <ol>
-      <li>Click <strong>Update Now</strong> (opens this page)</li>
-      <li>Run the install command again (it updates in-place)</li>
-      <li>Click the <strong>↻ reload</strong> icon on each browser's extension page</li>
-    </ol>
-
+    <h2>How Updates Work</h2>
     <div class="note">
-      <strong>One folder, all browsers:</strong> All browsers load from the same extension folder. Update once, reload all.
+      <strong>Automatic:</strong> The background updater downloads new versions automatically.<br>
+      <strong>You just reload:</strong> When the extension shows "Update available", click the ↻ reload icon in your browser's extensions page.
     </div>
+
+    <p><strong>All browsers share one folder</strong> - update downloads once, reload in each browser.</p>
 
     <h2>First-Time Setup</h2>
     <ol>
