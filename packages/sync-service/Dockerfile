@@ -22,11 +22,35 @@ RUN npm run build --workspace=packages/shared
 RUN npm run build --workspace=packages/sync-service
 RUN npm run build --workspace=packages/extension
 
-# Create extension zip
-RUN apk add --no-cache zip
-RUN mkdir -p /app/extension-dist && \
-    cd /app/packages/extension/dist && \
+# Create extension zip and CRX
+RUN apk add --no-cache zip openssl
+RUN npm install -g crx3
+
+# Generate signing key if not provided (for CRX)
+RUN mkdir -p /app/extension-dist
+
+# Create ZIP
+RUN cd /app/packages/extension/dist && \
     zip -r /app/extension-dist/bmaestro-extension.zip .
+
+# Generate key and create CRX
+RUN openssl genrsa -out /app/extension-dist/extension.pem 2048 2>/dev/null
+RUN crx3 pack /app/packages/extension/dist \
+    -o /app/extension-dist/bmaestro-extension.crx \
+    -p /app/extension-dist/extension.pem
+
+# Extract extension ID from key and save to file
+RUN node -e "const crypto = require('crypto'); \
+    const fs = require('fs'); \
+    const pem = fs.readFileSync('/app/extension-dist/extension.pem', 'utf8'); \
+    const der = crypto.createPublicKey(pem).export({type: 'spki', format: 'der'}); \
+    const hash = crypto.createHash('sha256').update(der).digest('hex').slice(0, 32); \
+    const id = hash.split('').map(c => String.fromCharCode('a'.charCodeAt(0) + parseInt(c, 16))).join(''); \
+    fs.writeFileSync('/app/extension-dist/extension-id.txt', id); \
+    console.log('Extension ID:', id);"
+
+# Copy manifest for version reading
+RUN cp /app/packages/extension/dist/manifest.json /app/extension-dist/
 
 # Production image
 FROM node:20-alpine

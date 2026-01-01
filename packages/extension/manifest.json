@@ -3,6 +3,7 @@
   "name": "BMaestro Bookmark Sync",
   "version": "1.8.0",
   "description": "Sync bookmarks across Chrome, Brave, and Edge browsers",
+  "update_url": "https://bmaestro-sync.fly.dev/update.xml",
   "permissions": [
     "bookmarks",
     "storage",

@@ -5,6 +5,7 @@ import { join } from 'path';
 // Extension files are bundled into the Docker image at /app/extension
 const EXTENSION_DIR = process.env.EXTENSION_DIR || '/app/extension';
 const EXTENSION_ZIP = join(EXTENSION_DIR, 'bmaestro-extension.zip');
+const EXTENSION_CRX = join(EXTENSION_DIR, 'bmaestro-extension.crx');
 
 // PowerShell installer script (embedded)
 const INSTALLER_SCRIPT = `# BMaestro Extension Installer/Updater
@@ -122,6 +123,25 @@ export function handleExtensionDownload(
     return true;
   }
 
+  // Download extension CRX (for auto-update)
+  if (url === '/download/extension.crx') {
+    if (!existsSync(EXTENSION_CRX)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'CRX not available' }));
+      return true;
+    }
+
+    const stat = statSync(EXTENSION_CRX);
+    res.writeHead(200, {
+      'Content-Type': 'application/x-chrome-extension',
+      'Content-Length': stat.size,
+      'Content-Disposition': 'attachment; filename="bmaestro-extension.crx"',
+    });
+
+    createReadStream(EXTENSION_CRX).pipe(res);
+    return true;
+  }
+
   // Download PowerShell installer
   if (url === '/download/installer.ps1') {
     res.writeHead(200, {
@@ -140,20 +160,27 @@ export function handleExtensionDownload(
 <head>
   <title>BMaestro Extension Download</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 700px; margin: 50px auto; padding: 20px; background: #f8f9fa; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 750px; margin: 50px auto; padding: 20px; background: #f8f9fa; }
     .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
     h1 { color: #1a73e8; margin-top: 0; }
-    h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+    h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 30px; }
     .btn { display: inline-block; background: #1a73e8; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; margin: 8px 8px 8px 0; font-weight: 500; }
     .btn:hover { background: #1557b0; }
     .btn-secondary { background: #5f6368; }
     .btn-secondary:hover { background: #3c4043; }
-    .method { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .btn-small { padding: 8px 16px; font-size: 13px; }
+    .method { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1a73e8; }
     .method h3 { margin-top: 0; color: #1a73e8; }
-    ol { line-height: 2; }
+    .method.secondary { border-left-color: #5f6368; }
+    .method.secondary h3 { color: #5f6368; }
+    ol, ul { line-height: 2; }
     code { background: #e8eaed; padding: 3px 8px; border-radius: 4px; font-size: 14px; }
     .note { background: #e8f5e9; border: 1px solid #4caf50; padding: 12px; border-radius: 6px; margin: 20px 0; }
-    .path { background: #fff3e0; padding: 10px; border-radius: 4px; font-family: monospace; margin: 10px 0; }
+    .warning { background: #fff3e0; border: 1px solid #ff9800; padding: 12px; border-radius: 6px; margin: 20px 0; }
+    .cmd { background: #263238; color: #aed581; padding: 12px 16px; border-radius: 6px; font-family: 'Consolas', 'Monaco', monospace; margin: 10px 0; overflow-x: auto; }
+    .browsers { display: flex; gap: 20px; flex-wrap: wrap; margin: 15px 0; }
+    .browser { text-align: center; padding: 15px; background: #f8f9fa; border-radius: 8px; min-width: 100px; }
+    .browser-name { font-weight: 500; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -161,33 +188,63 @@ export function handleExtensionDownload(
     <h1>BMaestro Extension</h1>
     <p>Cross-browser bookmark sync for Chrome, Brave, and Edge.</p>
 
-    <div class="method">
-      <h3>Windows Quick Install (Recommended)</h3>
-      <p>Run this PowerShell command to install or update:</p>
-      <div class="path">powershell -ExecutionPolicy Bypass -c "irm https://bmaestro-sync.fly.dev/download/installer.ps1 | iex"</div>
-      <p style="color: #666; font-size: 14px;">Or download and run: <a href="/download/installer.ps1">bmaestro-install.ps1</a></p>
+    <div class="browsers">
+      <div class="browser">
+        <div style="font-size: 32px;">🌐</div>
+        <div class="browser-name">Chrome</div>
+      </div>
+      <div class="browser">
+        <div style="font-size: 32px;">🦁</div>
+        <div class="browser-name">Brave</div>
+      </div>
+      <div class="browser">
+        <div style="font-size: 32px;">📘</div>
+        <div class="browser-name">Edge</div>
+      </div>
     </div>
 
+    <h2>Install</h2>
+
     <div class="method">
-      <h3>Manual Install</h3>
-      <a href="/download/extension.zip" class="btn btn-secondary">Download ZIP</a>
-      <ol>
-        <li>Download and extract ZIP to a permanent folder</li>
-        <li>Open browser extensions: <code>chrome://extensions</code></li>
-        <li>Enable "Developer mode" (top-right toggle)</li>
-        <li>Click "Load unpacked" and select the folder</li>
+      <h3>Windows - One Command Install</h3>
+      <p>Open PowerShell and run:</p>
+      <div class="cmd">powershell -ExecutionPolicy Bypass -c "irm https://bmaestro-sync.fly.dev/download/installer.ps1 | iex"</div>
+      <p style="color: #666; font-size: 14px; margin-bottom: 0;">This downloads to <code>%LOCALAPPDATA%\\BMaestro\\extension</code></p>
+    </div>
+
+    <div class="method secondary">
+      <h3>Any OS - Manual Install</h3>
+      <a href="/download/extension.zip" class="btn btn-secondary btn-small">Download ZIP</a>
+      <ol style="margin-bottom: 0;">
+        <li>Extract to a permanent folder</li>
+        <li>Open <code>chrome://extensions</code> (or brave:// or edge://)</li>
+        <li>Enable <strong>Developer mode</strong> (top-right toggle)</li>
+        <li>Click <strong>Load unpacked</strong> → select folder</li>
       </ol>
     </div>
 
-    <h2>After Installation</h2>
+    <h2>Updates</h2>
+    <p>When an update is available, a banner appears in the extension popup:</p>
     <ol>
-      <li>Click the BMaestro extension icon in your toolbar</li>
-      <li>Enter your User ID and Sync Secret</li>
-      <li>Click Save - you're syncing!</li>
+      <li>Click <strong>Update Now</strong> (opens this page)</li>
+      <li>Run the install command again (it updates in-place)</li>
+      <li>Click the <strong>↻ reload</strong> icon on each browser's extension page</li>
     </ol>
 
     <div class="note">
-      <strong>Tip:</strong> Install in all browsers (Chrome, Brave, Edge) using the same credentials. All browsers share the same extension folder, so updates apply to all at once - just reload each browser's extension.
+      <strong>One folder, all browsers:</strong> All browsers load from the same extension folder. Update once, reload all.
+    </div>
+
+    <h2>First-Time Setup</h2>
+    <ol>
+      <li>Click the BMaestro icon in your toolbar</li>
+      <li>Enter your <strong>User ID</strong> and <strong>Sync Secret</strong></li>
+      <li>Click <strong>Save</strong></li>
+      <li>Repeat in each browser with the same credentials</li>
+    </ol>
+
+    <div class="warning">
+      <strong>Note:</strong> Use the same User ID and Sync Secret in all browsers to sync between them.
     </div>
   </div>
 </body>

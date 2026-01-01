@@ -3,6 +3,7 @@ import { logActivity, getActivityLog } from './activity-logger.js';
 import { processSyncRequest } from '../sync/processor.js';
 import { handleExtensionDownload } from './extension-download.js';
 import { handleVersionCheck } from './version.js';
+import { handleUpdateManifest } from './update-manifest.js';
 
 function parseBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -63,6 +64,11 @@ export async function handleHttpRequest(
   // Extension download (no auth)
   if (path.startsWith('/download') || path === '/install') {
     return handleExtensionDownload(req, res);
+  }
+
+  // Update manifest for Chrome auto-update (no auth)
+  if (path === '/update.xml') {
+    return handleUpdateManifest(req, res);
   }
 
   // Version check (no auth)
