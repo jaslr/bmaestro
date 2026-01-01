@@ -99,32 +99,35 @@ Read-Host "Press Enter to exit"
 `;
 
 // Auto-updater script - runs in background, checks for updates
-const UPDATER_SCRIPT = `# BMaestro Auto-Updater Service
-# Runs in background, checks for updates, auto-downloads new versions
+const UPDATER_SCRIPT = `# BMaestro Auto-Updater Service v2
+# Runs in background, checks for updates every 2 minutes, auto-downloads
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "SilentlyContinue"
+$ScriptVersion = 2
 $InstallDir = "$env:LOCALAPPDATA\\BMaestro\\extension"
+$UpdaterPath = "$env:LOCALAPPDATA\\BMaestro\\bmaestro-updater.ps1"
 $VersionUrl = "https://bmaestro-sync.fly.dev/version"
+$UpdaterUrl = "https://bmaestro-sync.fly.dev/download/updater.ps1"
 $DownloadUrl = "https://bmaestro-sync.fly.dev/download/extension.zip"
 $TempZip = "$env:TEMP\\bmaestro-update.zip"
-$IntervalMinutes = 30
+$IntervalSeconds = 120
 
 function Get-LocalVersion {
     $manifestPath = "$InstallDir\\manifest.json"
     if (Test-Path $manifestPath) {
-        $manifest = Get-Content $manifestPath | ConvertFrom-Json
-        return $manifest.version
+        try {
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            return $manifest.version
+        } catch { return "0.0.0" }
     }
     return "0.0.0"
 }
 
 function Get-RemoteVersion {
     try {
-        $response = Invoke-RestMethod -Uri $VersionUrl -UseBasicParsing
+        $response = Invoke-RestMethod -Uri $VersionUrl -UseBasicParsing -TimeoutSec 10
         return $response.version
-    } catch {
-        return $null
-    }
+    } catch { return $null }
 }
 
 function Compare-Versions {
@@ -142,33 +145,51 @@ function Compare-Versions {
 
 function Update-Extension {
     try {
-        Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip -UseBasicParsing
+        Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip -UseBasicParsing -TimeoutSec 60
         if (-not (Test-Path $InstallDir)) {
             New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
         }
-        Get-ChildItem -Path $InstallDir | Remove-Item -Recurse -Force
+        Get-ChildItem -Path $InstallDir | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         Expand-Archive -Path $TempZip -DestinationPath $InstallDir -Force
         Remove-Item $TempZip -Force -ErrorAction SilentlyContinue
         return $true
-    } catch {
-        return $false
-    }
+    } catch { return $false }
 }
 
-# Initial check
+function Update-Self {
+    # Check if there's a newer updater script and download it
+    try {
+        $newScript = Invoke-WebRequest -Uri $UpdaterUrl -UseBasicParsing -TimeoutSec 10
+        $content = $newScript.Content
+        if ($content -match 'ScriptVersion = (\\d+)') {
+            $remoteVersion = [int]$matches[1]
+            if ($remoteVersion -gt $ScriptVersion) {
+                Set-Content -Path $UpdaterPath -Value $content -Force
+                # Restart with new script
+                Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$UpdaterPath\`"" -WindowStyle Hidden
+                exit
+            }
+        }
+    } catch { }
+}
+
+# Self-update check on start
+Update-Self
+
+# Initial extension check
 $localVersion = Get-LocalVersion
 if ($localVersion -eq "0.0.0") {
     Update-Extension
 }
 
-# Update loop
+# Update loop - checks every 2 minutes
 while ($true) {
     $localVersion = Get-LocalVersion
     $remoteVersion = Get-RemoteVersion
     if ($remoteVersion -and (Compare-Versions $localVersion $remoteVersion)) {
         Update-Extension
     }
-    Start-Sleep -Seconds ($IntervalMinutes * 60)
+    Start-Sleep -Seconds $IntervalSeconds
 }
 `;
 
@@ -329,46 +350,49 @@ export function handleExtensionDownload(
   }
 
   // Download quick install CMD (for in-app update button)
-  // This is a self-contained batch file that downloads and installs the update
+  // This updates both the extension AND the background updater
   if (url === '/download/install.cmd') {
     const installCmd = `@echo off
 setlocal EnableDelayedExpansion
 
 echo.
 echo ================================
-echo   BMaestro Update Installer
+echo   BMaestro Update
 echo ================================
 echo.
 
-set "INSTALL_DIR=%LOCALAPPDATA%\\BMaestro\\extension"
+set "BASE_DIR=%LOCALAPPDATA%\\BMaestro"
+set "INSTALL_DIR=%BASE_DIR%\\extension"
+set "UPDATER_PATH=%BASE_DIR%\\bmaestro-updater.ps1"
 set "TEMP_ZIP=%TEMP%\\bmaestro-update.zip"
-set "DOWNLOAD_URL=https://bmaestro-sync.fly.dev/download/extension.zip"
+set "EXT_URL=https://bmaestro-sync.fly.dev/download/extension.zip"
+set "UPDATER_URL=https://bmaestro-sync.fly.dev/download/updater.ps1"
 
-echo Downloading update...
-powershell -Command "Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%TEMP_ZIP%' -UseBasicParsing"
+:: Create base dir if needed
+if not exist "%BASE_DIR%" mkdir "%BASE_DIR%"
+
+echo [1/3] Downloading extension...
+powershell -Command "Invoke-WebRequest -Uri '%EXT_URL%' -OutFile '%TEMP_ZIP%' -UseBasicParsing" 2>nul
 if errorlevel 1 (
     echo Download failed!
     pause
     exit /b 1
 )
 
-echo Removing old version...
-if exist "%INSTALL_DIR%" (
-    rd /s /q "%INSTALL_DIR%"
-)
+echo [2/3] Installing extension...
+if exist "%INSTALL_DIR%" rd /s /q "%INSTALL_DIR%"
 mkdir "%INSTALL_DIR%"
-
-echo Extracting...
-powershell -Command "Expand-Archive -Path '%TEMP_ZIP%' -DestinationPath '%INSTALL_DIR%' -Force"
-if errorlevel 1 (
-    echo Extraction failed!
-    pause
-    exit /b 1
-)
-
+powershell -Command "Expand-Archive -Path '%TEMP_ZIP%' -DestinationPath '%INSTALL_DIR%' -Force" 2>nul
 del "%TEMP_ZIP%" 2>nul
 
-:: Get version from manifest
+echo [3/3] Updating background service...
+powershell -Command "Invoke-WebRequest -Uri '%UPDATER_URL%' -OutFile '%UPDATER_PATH%' -UseBasicParsing" 2>nul
+
+:: Kill old updater and start new one
+taskkill /F /IM powershell.exe /FI "WINDOWTITLE eq BMaestro*" 2>nul
+start "" /B powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "%UPDATER_PATH%"
+
+:: Get version
 for /f "tokens=2 delims=:," %%a in ('type "%INSTALL_DIR%\\manifest.json" ^| findstr "version"') do (
     set "VERSION=%%~a"
     set "VERSION=!VERSION: =!"
@@ -377,12 +401,13 @@ for /f "tokens=2 delims=:," %%a in ('type "%INSTALL_DIR%\\manifest.json" ^| find
 
 echo.
 echo ================================
-echo   SUCCESS! Updated to v!VERSION!
+echo   Done! Now at v!VERSION!
 echo ================================
 echo.
-echo Now reload the extension in each browser:
-echo   - Go to chrome://extensions (or brave:// or edge://)
-echo   - Click the refresh icon on BMaestro
+echo Reload the extension in your browser:
+echo   Extensions page ^> click refresh on BMaestro
+echo.
+echo Future updates will install automatically.
 echo.
 pause
 `;
