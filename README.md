@@ -40,7 +40,58 @@ Local:
 | `@bmaestro/dashboard` | SvelteKit web dashboard |
 | `@bmaestro/mcp-server` | Claude AI integration |
 
-## Quick Start
+## Getting Started (Users)
+
+### Step 1: Install the Extension
+
+Open PowerShell and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://bmaestro-sync.fly.dev/download/setup.ps1 | iex"
+```
+
+This will:
+- Download the extension to `C:\Users\<YourUsername>\AppData\Local\BMaestro\extension`
+- Set up automatic updates (checks every 30 minutes)
+
+### Step 2: Load in Each Browser
+
+For **Chrome**, **Brave**, and **Edge**:
+
+1. Open the extensions page:
+   - Chrome: `chrome://extensions`
+   - Brave: `brave://extensions`
+   - Edge: `edge://extensions`
+
+2. Enable **Developer mode** (toggle in top-right)
+
+3. Click **Load unpacked**
+
+4. Navigate to your extension folder:
+   ```
+   C:\Users\<YourUsername>\AppData\Local\BMaestro\extension
+   ```
+
+5. Click **Select Folder**
+
+### Step 3: Configure Sync
+
+1. Click the BMaestro extension icon in your toolbar
+2. Enter your **User ID** and **Sync Secret**
+3. Click **Save**
+4. Repeat in each browser with the same credentials
+
+### Updates
+
+- Updates download automatically in the background
+- When the extension shows "Update available", click the ↻ reload icon on the extensions page
+- All browsers share the same folder, so updates apply to all at once
+
+---
+
+## Development
+
+### Quick Start
 
 ```bash
 # Install dependencies

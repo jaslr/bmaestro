@@ -174,23 +174,26 @@ while ($true) {
 
 // Complete setup script - installs extension + auto-updater
 const SETUP_SCRIPT = `# BMaestro Complete Setup
-# Downloads extension + installs auto-updater as scheduled task
+# Downloads extension + installs auto-updater
 
 $ErrorActionPreference = "Stop"
+$Username = $env:USERNAME
 $InstallDir = "$env:LOCALAPPDATA\\BMaestro"
 $ExtensionDir = "$InstallDir\\extension"
 $UpdaterScript = "$InstallDir\\bmaestro-updater.ps1"
+$StartupDir = "$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+$StartupShortcut = "$StartupDir\\BMaestro Updater.bat"
 $DownloadUrl = "https://bmaestro-sync.fly.dev/download/extension.zip"
 $UpdaterUrl = "https://bmaestro-sync.fly.dev/download/updater.ps1"
 $TempZip = "$env:TEMP\\bmaestro-extension.zip"
-$TaskName = "BMaestro Auto-Updater"
 
 Write-Host ""
-Write-Host "BMaestro Setup" -ForegroundColor Cyan
-Write-Host "==============" -ForegroundColor Cyan
+Write-Host "BMaestro Setup for $Username" -ForegroundColor Cyan
+Write-Host "==============================" -ForegroundColor Cyan
 Write-Host ""
 
 # Create directories
+Write-Host "Creating folders..." -ForegroundColor Gray
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 New-Item -ItemType Directory -Path $ExtensionDir -Force | Out-Null
 
@@ -199,7 +202,7 @@ Write-Host "Downloading extension..." -ForegroundColor Gray
 Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip -UseBasicParsing
 
 # Extract
-Write-Host "Installing..." -ForegroundColor Gray
+Write-Host "Installing extension..." -ForegroundColor Gray
 Get-ChildItem -Path $ExtensionDir -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 Expand-Archive -Path $TempZip -DestinationPath $ExtensionDir -Force
 Remove-Item $TempZip -Force
@@ -208,29 +211,44 @@ Remove-Item $TempZip -Force
 $manifest = Get-Content "$ExtensionDir\\manifest.json" | ConvertFrom-Json
 $version = $manifest.version
 
-# Download and install updater
+# Download updater script
 Write-Host "Setting up auto-updater..." -ForegroundColor Gray
 Invoke-WebRequest -Uri $UpdaterUrl -OutFile $UpdaterScript -UseBasicParsing
 
-# Create scheduled task
-Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$UpdaterScript\`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -RunLevel Limited | Out-Null
-Start-ScheduledTask -TaskName $TaskName
+# Create startup batch file (runs updater at login, no admin required)
+$batchContent = @"
+@echo off
+powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "$UpdaterScript"
+"@
+Set-Content -Path $StartupShortcut -Value $batchContent -Force
 
 Write-Host ""
-Write-Host "SUCCESS! BMaestro v$version installed" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
+Write-Host "  SUCCESS! BMaestro v$version installed" -ForegroundColor Green
+Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Extension folder: $ExtensionDir" -ForegroundColor Cyan
-Write-Host "Auto-updater: Running (checks every 30 min)" -ForegroundColor Green
+Write-Host "Extension installed to:" -ForegroundColor White
+Write-Host "  $ExtensionDir" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "NEXT: Load extension in each browser" -ForegroundColor Yellow
-Write-Host "  1. Go to chrome://extensions (or brave:// or edge://)" -ForegroundColor White
-Write-Host "  2. Enable Developer mode (top-right)" -ForegroundColor White
-Write-Host "  3. Click Load unpacked" -ForegroundColor White
-Write-Host "  4. Select: $ExtensionDir" -ForegroundColor Cyan
+Write-Host "Auto-updater: Installed (runs at login)" -ForegroundColor Green
+Write-Host ""
+Write-Host "----------------------------------------" -ForegroundColor Gray
+Write-Host "NEXT STEP: Load extension in each browser" -ForegroundColor Yellow
+Write-Host "----------------------------------------" -ForegroundColor Gray
+Write-Host ""
+Write-Host "For Chrome, Brave, and Edge:" -ForegroundColor White
+Write-Host ""
+Write-Host "  1. Open extensions page:" -ForegroundColor White
+Write-Host "     - Chrome: chrome://extensions" -ForegroundColor Gray
+Write-Host "     - Brave:  brave://extensions" -ForegroundColor Gray
+Write-Host "     - Edge:   edge://extensions" -ForegroundColor Gray
+Write-Host ""
+Write-Host "  2. Enable 'Developer mode' (top-right toggle)" -ForegroundColor White
+Write-Host ""
+Write-Host "  3. Click 'Load unpacked'" -ForegroundColor White
+Write-Host ""
+Write-Host "  4. Paste this path and click Select Folder:" -ForegroundColor White
+Write-Host "     $ExtensionDir" -ForegroundColor Cyan
 Write-Host ""
 
 Read-Host "Press Enter to exit"
