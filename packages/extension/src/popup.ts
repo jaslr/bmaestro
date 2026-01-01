@@ -66,9 +66,35 @@ async function init(): Promise<void> {
       canonicalToggle.checked = stored.isCanonical === true;
 
       canonicalToggle.addEventListener('change', async () => {
-        const isCanonical = canonicalToggle.checked;
+        const wantsCanonical = canonicalToggle.checked;
+
         try {
-          await chrome.storage.local.set({ isCanonical });
+          if (wantsCanonical && stored.userId && stored.syncSecret) {
+            // Check if another browser already has Source of Truth
+            const checkResponse = await fetch('https://bmaestro-sync.fly.dev/canonical', {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${stored.syncSecret}`,
+                'X-User-Id': stored.userId,
+              },
+            });
+
+            if (checkResponse.ok) {
+              const data = await checkResponse.json();
+              if (data.canonicalBrowser && data.canonicalBrowser !== 'none') {
+                const confirmed = confirm(
+                  `Another browser (${data.canonicalBrowser}) is currently the Source of Truth.\n\n` +
+                  `Take over control from ${data.canonicalBrowser}?`
+                );
+                if (!confirmed) {
+                  canonicalToggle.checked = false;
+                  return;
+                }
+              }
+            }
+          }
+
+          await chrome.storage.local.set({ isCanonical: wantsCanonical });
 
           // Notify the cloud about canonical status
           if (stored.userId && stored.syncSecret) {
@@ -78,23 +104,32 @@ async function init(): Promise<void> {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${stored.syncSecret}`,
                 'X-User-Id': stored.userId,
+                'X-Browser-Type': detectBrowser(),
               },
-              body: JSON.stringify({ isCanonical }),
+              body: JSON.stringify({ isCanonical: wantsCanonical }),
             });
           }
 
-          showNotification(isCanonical ? 'Set as Source of Truth' : 'Removed Source of Truth status', 'success');
+          showNotification(wantsCanonical ? 'Set as Source of Truth' : 'Removed Source of Truth status', 'success');
 
           // If becoming canonical, load pending deletions
-          if (isCanonical) {
+          if (wantsCanonical) {
             loadModerations();
           }
         } catch (err: any) {
           console.error('[Popup] Set canonical error:', err);
           showNotification(`Failed: ${err.message}`, 'error');
-          canonicalToggle.checked = !isCanonical; // Revert
+          canonicalToggle.checked = !wantsCanonical; // Revert
         }
       });
+    }
+
+    // Detect browser type for header
+    function detectBrowser(): string {
+      const ua = navigator.userAgent;
+      if (ua.includes('Brave')) return 'brave';
+      if (ua.includes('Edg/')) return 'edge';
+      return 'chrome';
     }
 
     // Tab switching

@@ -131,6 +131,21 @@ h1 {
   color: var(--amber);
 }
 
+.menu-item.toggle-item {
+  cursor: default;
+}
+
+.menu-item.toggle-item:hover {
+  background: none;
+  color: inherit;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--bg-elevated);
+  margin: 4px 0;
+}
+
 /* Notifications */
 .notification {
   padding: 10px 12px;
@@ -514,6 +529,24 @@ h2 {
 
 .toggle-label input:checked ~ .toggle-text {
   color: var(--cyan);
+}
+
+/* Small toggle variant for menu */
+.toggle-slider.small {
+  width: 28px;
+  height: 14px;
+  border-radius: 7px;
+}
+
+.toggle-slider.small::after {
+  width: 10px;
+  height: 10px;
+  top: 2px;
+  left: 2px;
+}
+
+.toggle-label input:checked + .toggle-slider.small::after {
+  left: 16px;
 }
 
 /* Tabs */

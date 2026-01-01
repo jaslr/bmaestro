@@ -12,6 +12,7 @@ import {
   acceptAllDeletions,
   rejectAllDeletions,
   setCanonicalBrowser,
+  getCanonicalBrowser,
 } from './moderation.js';
 
 function parseBody(req: IncomingMessage): Promise<any> {
@@ -138,6 +139,13 @@ export async function handleHttpRequest(
     });
 
     json(res, result);
+    return true;
+  }
+
+  // GET /canonical - Check current canonical browser
+  if (path === '/canonical' && method === 'GET') {
+    const current = getCanonicalBrowser(userId);
+    json(res, { canonicalBrowser: current || 'none' });
     return true;
   }
 

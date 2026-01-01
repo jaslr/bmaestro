@@ -15,6 +15,14 @@
     </header>
 
     <div id="settingsMenu" class="settings-menu hidden">
+      <div class="menu-item toggle-item">
+        <label class="toggle-label">
+          <input type="checkbox" id="canonicalToggle">
+          <span class="toggle-slider small"></span>
+          <span class="toggle-text">Source of Truth</span>
+        </label>
+      </div>
+      <div class="menu-divider"></div>
       <button id="logoutBtn" class="menu-item">Clear Config & Logout</button>
     </div>
 
@@ -25,15 +33,6 @@
       <div class="update-actions">
         <button id="updateNow" class="update-btn">Update Now</button>
       </div>
-    </div>
-
-    
-    <div class="canonical-toggle">
-      <label class="toggle-label">
-        <input type="checkbox" id="canonicalToggle">
-        <span class="toggle-slider"></span>
-        <span class="toggle-text">Source of Truth</span>
-      </label>
     </div>
 
     <div class="status-section">
