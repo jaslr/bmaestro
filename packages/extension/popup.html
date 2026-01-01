@@ -28,6 +28,14 @@
     </div>
 
     
+    <div class="canonical-toggle">
+      <label class="toggle-label">
+        <input type="checkbox" id="canonicalToggle">
+        <span class="toggle-slider"></span>
+        <span class="toggle-text">Source of Truth</span>
+      </label>
+    </div>
+
     <div class="status-section">
       <div class="status-row">
         <span class="label">Status:</span>
@@ -73,14 +81,33 @@
       <button id="saveConfig" class="btn">Save Configuration</button>
     </div>
 
-    
-    <div class="activity-section">
-      <div class="section-header">
-        <h2>Activity</h2>
-        <button id="refreshActivity" class="btn small">Refresh</button>
+
+    <div class="tabs-section">
+      <div class="tab-bar">
+        <button class="tab-btn active" data-tab="activity">Activity</button>
+        <button class="tab-btn" data-tab="moderation">
+          Moderation
+          <span id="moderationBadge" class="badge hidden">0</span>
+        </button>
       </div>
-      <div id="activityList" class="activity-list">
-        <div class="activity-empty">No activity yet</div>
+
+      <div id="activityTab" class="tab-content active">
+        <div class="tab-header">
+          <button id="refreshActivity" class="btn small">Refresh</button>
+        </div>
+        <div id="activityList" class="activity-list">
+          <div class="activity-empty">No activity yet</div>
+        </div>
+      </div>
+
+      <div id="moderationTab" class="tab-content">
+        <div id="moderationList" class="moderation-list">
+          <div class="moderation-empty">No pending deletions</div>
+        </div>
+        <div id="moderationActions" class="moderation-actions hidden">
+          <button id="acceptAll" class="btn small">Accept All</button>
+          <button id="rejectAll" class="btn small warning">Reject All</button>
+        </div>
       </div>
     </div>
 

@@ -247,21 +247,51 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
 
   console.log('[BMaestro] Bookmark removed:', id, removeInfo.node);
 
-  // Include URL and title so other browsers can find the bookmark to delete
-  client.queueOperation({
-    id: crypto.randomUUID(),
-    opType: 'DELETE',
-    bookmarkId: id,
-    payload: {
-      nativeId: id,
-      parentNativeId: removeInfo.parentId,
-      url: removeInfo.node.url,
-      title: removeInfo.node.title,
-    },
-    timestamp: new Date().toISOString(),
-  });
+  // Check if this browser is canonical (source of truth)
+  const { isCanonical, userId, syncSecret } = await chrome.storage.local.get(['isCanonical', 'userId', 'syncSecret']);
 
-  client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
+  if (isCanonical) {
+    // Canonical browser: delete syncs directly
+    client.queueOperation({
+      id: crypto.randomUUID(),
+      opType: 'DELETE',
+      bookmarkId: id,
+      payload: {
+        nativeId: id,
+        parentNativeId: removeInfo.parentId,
+        url: removeInfo.node.url,
+        title: removeInfo.node.title,
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
+  } else {
+    // Non-canonical browser: queue for moderation instead of direct delete
+    console.log('[BMaestro] Queuing deletion for moderation (non-canonical browser)');
+
+    if (userId && syncSecret) {
+      try {
+        await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${syncSecret}`,
+            'X-User-Id': userId,
+          },
+          body: JSON.stringify({
+            browser: browserType,
+            url: removeInfo.node.url,
+            title: removeInfo.node.title,
+            parentId: removeInfo.parentId,
+          }),
+        });
+        console.log('[BMaestro] Deletion queued for moderation');
+      } catch (err) {
+        console.error('[BMaestro] Failed to queue deletion for moderation:', err);
+      }
+    }
+  }
 });
 
 chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {

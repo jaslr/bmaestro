@@ -53,10 +53,236 @@ async function init(): Promise<void> {
         'pollIntervalMinutes',
         'lastSyncTime',
         'pendingOps',
+        'isCanonical',
       ]);
-      console.log('[Popup] Loaded config:', { userId: stored.userId ? 'set' : 'not set', syncSecret: stored.syncSecret ? 'set' : 'not set' });
+      console.log('[Popup] Loaded config:', { userId: stored.userId ? 'set' : 'not set', syncSecret: stored.syncSecret ? 'set' : 'not set', isCanonical: stored.isCanonical });
     } catch (err) {
       console.error('[Popup] Failed to load config:', err);
+    }
+
+    // Canonical toggle
+    const canonicalToggle = document.getElementById('canonicalToggle') as HTMLInputElement | null;
+    if (canonicalToggle) {
+      canonicalToggle.checked = stored.isCanonical === true;
+
+      canonicalToggle.addEventListener('change', async () => {
+        const isCanonical = canonicalToggle.checked;
+        try {
+          await chrome.storage.local.set({ isCanonical });
+
+          // Notify the cloud about canonical status
+          if (stored.userId && stored.syncSecret) {
+            await fetch('https://bmaestro-sync.fly.dev/canonical', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${stored.syncSecret}`,
+                'X-User-Id': stored.userId,
+              },
+              body: JSON.stringify({ isCanonical }),
+            });
+          }
+
+          showNotification(isCanonical ? 'Set as Source of Truth' : 'Removed Source of Truth status', 'success');
+
+          // If becoming canonical, load pending deletions
+          if (isCanonical) {
+            loadModerations();
+          }
+        } catch (err: any) {
+          console.error('[Popup] Set canonical error:', err);
+          showNotification(`Failed: ${err.message}`, 'error');
+          canonicalToggle.checked = !isCanonical; // Revert
+        }
+      });
+    }
+
+    // Tab switching
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tabName = btn.getAttribute('data-tab');
+
+        tabBtns.forEach(b => b.classList.remove('active'));
+        tabContents.forEach(c => c.classList.remove('active'));
+
+        btn.classList.add('active');
+        document.getElementById(`${tabName}Tab`)?.classList.add('active');
+
+        if (tabName === 'moderation') {
+          loadModerations();
+        }
+      });
+    });
+
+    // Moderation functions
+    const moderationBadge = document.getElementById('moderationBadge');
+    const moderationList = document.getElementById('moderationList');
+    const moderationActions = document.getElementById('moderationActions');
+
+    async function loadModerations(): Promise<void> {
+      if (!stored.userId || !stored.syncSecret) return;
+
+      try {
+        const response = await fetch('https://bmaestro-sync.fly.dev/moderation/pending', {
+          headers: {
+            'Authorization': `Bearer ${stored.syncSecret}`,
+            'X-User-Id': stored.userId,
+          },
+        });
+
+        if (!response.ok) {
+          if (moderationList) {
+            moderationList.innerHTML = '<div class="moderation-empty">Failed to load</div>';
+          }
+          return;
+        }
+
+        const data = await response.json();
+        const items = data.items || [];
+
+        // Update badge
+        if (moderationBadge) {
+          if (items.length > 0) {
+            moderationBadge.textContent = String(items.length);
+            moderationBadge.classList.remove('hidden');
+          } else {
+            moderationBadge.classList.add('hidden');
+          }
+        }
+
+        // Update list
+        if (moderationList) {
+          if (items.length === 0) {
+            moderationList.innerHTML = '<div class="moderation-empty">No pending deletions</div>';
+          } else {
+            moderationList.innerHTML = items.map((item: any) => `
+              <div class="moderation-item" data-id="${item.id}">
+                <div class="moderation-info">
+                  <span class="moderation-title">${escapeHtml(item.title || 'Untitled')}</span>
+                  <span class="moderation-meta">
+                    Deleted by <span class="browser">${item.browser || 'unknown'}</span>
+                    ${item.url ? ` · ${truncateUrl(item.url)}` : ''}
+                  </span>
+                </div>
+                <div class="moderation-btns">
+                  <button class="btn small" onclick="handleModeration('${item.id}', 'accept')">Accept</button>
+                  <button class="btn small warning" onclick="handleModeration('${item.id}', 'reject')">Reject</button>
+                </div>
+              </div>
+            `).join('');
+          }
+        }
+
+        // Show/hide bulk actions
+        if (moderationActions) {
+          if (items.length > 1) {
+            moderationActions.classList.remove('hidden');
+          } else {
+            moderationActions.classList.add('hidden');
+          }
+        }
+      } catch (err) {
+        console.error('[Popup] Load moderation error:', err);
+        if (moderationList) {
+          moderationList.innerHTML = '<div class="moderation-empty">Error loading</div>';
+        }
+      }
+    }
+
+    function escapeHtml(text: string): string {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function truncateUrl(url: string): string {
+      try {
+        const u = new URL(url);
+        return u.hostname.replace('www.', '');
+      } catch {
+        return url.substring(0, 20) + '...';
+      }
+    }
+
+    // Global handler for moderation buttons
+    (window as any).handleModeration = async (id: string, action: 'accept' | 'reject') => {
+      try {
+        const response = await fetch(`https://bmaestro-sync.fly.dev/moderation/${id}/${action}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${stored.syncSecret}`,
+            'X-User-Id': stored.userId,
+          },
+        });
+
+        if (response.ok) {
+          showNotification(`Deletion ${action}ed`, 'success');
+          loadModerations();
+
+          // If rejected, trigger sync to restore bookmark
+          if (action === 'reject') {
+            chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
+          }
+        } else {
+          showNotification(`Failed to ${action}`, 'error');
+        }
+      } catch (err: any) {
+        showNotification(`Error: ${err.message}`, 'error');
+      }
+    };
+
+    // Accept all / Reject all
+    const acceptAllBtn = document.getElementById('acceptAll') as HTMLButtonElement | null;
+    const rejectAllBtn = document.getElementById('rejectAll') as HTMLButtonElement | null;
+
+    if (acceptAllBtn) {
+      acceptAllBtn.addEventListener('click', async () => {
+        if (!confirm('Accept all pending deletions?')) return;
+
+        try {
+          const response = await fetch('https://bmaestro-sync.fly.dev/moderation/accept-all', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${stored.syncSecret}`,
+              'X-User-Id': stored.userId,
+            },
+          });
+
+          if (response.ok) {
+            showNotification('All deletions accepted', 'success');
+            loadModerations();
+          }
+        } catch (err: any) {
+          showNotification(`Error: ${err.message}`, 'error');
+        }
+      });
+    }
+
+    if (rejectAllBtn) {
+      rejectAllBtn.addEventListener('click', async () => {
+        if (!confirm('Reject all pending deletions? Bookmarks will be restored.')) return;
+
+        try {
+          const response = await fetch('https://bmaestro-sync.fly.dev/moderation/reject-all', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${stored.syncSecret}`,
+              'X-User-Id': stored.userId,
+            },
+          });
+
+          if (response.ok) {
+            showNotification('All deletions rejected', 'success');
+            loadModerations();
+            chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
+          }
+        } catch (err: any) {
+          showNotification(`Error: ${err.message}`, 'error');
+        }
+      });
     }
 
     // Update status display
@@ -410,9 +636,11 @@ async function init(): Promise<void> {
       });
     }
 
-    // Load activity on init if configured
+    // Load activity and moderation badge on init if configured
     if (stored.userId && stored.syncSecret) {
       loadActivity();
+      // Always load moderation count for badge
+      loadModerations();
     }
 
     // Reload Extension button (shown only when update available)

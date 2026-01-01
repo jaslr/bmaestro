@@ -4,6 +4,15 @@ import { processSyncRequest } from '../sync/processor.js';
 import { handleExtensionDownload } from './extension-download.js';
 import { handleVersionCheck } from './version.js';
 import { handleUpdateManifest } from './update-manifest.js';
+import {
+  queueDeletion,
+  getPendingDeletions,
+  acceptDeletion,
+  rejectDeletion,
+  acceptAllDeletions,
+  rejectAllDeletions,
+  setCanonicalBrowser,
+} from './moderation.js';
 
 function parseBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -129,6 +138,109 @@ export async function handleHttpRequest(
     });
 
     json(res, result);
+    return true;
+  }
+
+  // POST /canonical - Set canonical browser status
+  if (path === '/canonical' && method === 'POST') {
+    const body = await parseBody(req);
+    const browserType = req.headers['x-browser-type'] as string || 'unknown';
+
+    if (body.isCanonical) {
+      setCanonicalBrowser(userId, browserType);
+    } else {
+      setCanonicalBrowser(userId, null);
+    }
+
+    json(res, { success: true });
+    return true;
+  }
+
+  // POST /moderation/queue - Queue a deletion for moderation
+  if (path === '/moderation/queue' && method === 'POST') {
+    const body = await parseBody(req);
+
+    const pending = queueDeletion(userId, {
+      browser: body.browser || 'unknown',
+      url: body.url,
+      title: body.title,
+      parentId: body.parentId,
+    });
+
+    json(res, { success: true, id: pending.id });
+    return true;
+  }
+
+  // GET /moderation/pending - Get pending deletions
+  if (path === '/moderation/pending' && method === 'GET') {
+    const items = getPendingDeletions(userId);
+    json(res, { items });
+    return true;
+  }
+
+  // POST /moderation/:id/accept - Accept a deletion
+  if (path.match(/^\/moderation\/[^/]+\/accept$/) && method === 'POST') {
+    const id = path.split('/')[2];
+    const accepted = acceptDeletion(userId, id);
+
+    if (!accepted) {
+      json(res, { error: 'Deletion not found' }, 404);
+      return true;
+    }
+
+    // Log the deletion as accepted (it will be synced to other browsers)
+    await logActivity({
+      user_id: userId,
+      device_id: 'moderation',
+      action: 'BOOKMARK_DELETE',
+      bookmark_url: accepted.url,
+      bookmark_title: accepted.title,
+      browser_type: accepted.browser as 'chrome' | 'brave' | 'edge',
+      timestamp: new Date().toISOString(),
+    });
+
+    json(res, { success: true, deleted: accepted });
+    return true;
+  }
+
+  // POST /moderation/:id/reject - Reject a deletion
+  if (path.match(/^\/moderation\/[^/]+\/reject$/) && method === 'POST') {
+    const id = path.split('/')[2];
+    const rejected = rejectDeletion(userId, id);
+
+    if (!rejected) {
+      json(res, { error: 'Deletion not found' }, 404);
+      return true;
+    }
+
+    json(res, { success: true, rejected });
+    return true;
+  }
+
+  // POST /moderation/accept-all - Accept all pending deletions
+  if (path === '/moderation/accept-all' && method === 'POST') {
+    const accepted = acceptAllDeletions(userId);
+
+    for (const item of accepted) {
+      await logActivity({
+        user_id: userId,
+        device_id: 'moderation',
+        action: 'BOOKMARK_DELETE',
+        bookmark_url: item.url,
+        bookmark_title: item.title,
+        browser_type: item.browser as 'chrome' | 'brave' | 'edge',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    json(res, { success: true, count: accepted.length });
+    return true;
+  }
+
+  // POST /moderation/reject-all - Reject all pending deletions
+  if (path === '/moderation/reject-all' && method === 'POST') {
+    const rejected = rejectAllDeletions(userId);
+    json(res, { success: true, count: rejected.length });
     return true;
   }
 

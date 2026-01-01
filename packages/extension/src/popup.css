@@ -457,6 +457,217 @@ h2 {
   color: var(--text-dim);
 }
 
+/* Canonical Toggle */
+.canonical-toggle {
+  background: var(--bg-elevated);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.toggle-label input {
+  display: none;
+}
+
+.toggle-slider {
+  width: 36px;
+  height: 18px;
+  background: var(--bg-surface);
+  border-radius: 9px;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.toggle-slider::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  transition: all 0.2s;
+}
+
+.toggle-label input:checked + .toggle-slider {
+  background: var(--cyan-dim);
+}
+
+.toggle-label input:checked + .toggle-slider::after {
+  background: var(--cyan);
+  left: 20px;
+}
+
+.toggle-text {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.toggle-label input:checked ~ .toggle-text {
+  color: var(--cyan);
+}
+
+/* Tabs */
+.tabs-section {
+  background: var(--bg-elevated);
+  padding: 0;
+  margin-bottom: 12px;
+}
+
+.tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--bg-surface);
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.15s;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  color: var(--cyan);
+}
+
+.tab-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--cyan);
+}
+
+.tab-content {
+  display: none;
+  padding: 12px;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+.tab-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+/* Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--amber);
+  color: var(--bg-base);
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 8px;
+  margin-left: 6px;
+}
+
+.badge.hidden {
+  display: none;
+}
+
+/* Moderation */
+.moderation-list {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.moderation-empty {
+  color: var(--text-dim);
+  font-size: 10px;
+  text-align: center;
+  padding: 12px;
+}
+
+.moderation-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--bg-surface);
+}
+
+.moderation-item:last-child {
+  border-bottom: none;
+}
+
+.moderation-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.moderation-title {
+  font-size: 11px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moderation-meta {
+  font-size: 9px;
+  color: var(--text-dim);
+}
+
+.moderation-meta .browser {
+  color: var(--amber);
+}
+
+.moderation-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.moderation-btns .btn {
+  flex: 1;
+  padding: 6px 8px;
+}
+
+.moderation-actions {
+  display: flex;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--bg-surface);
+  margin-top: 10px;
+}
+
+.moderation-actions.hidden {
+  display: none;
+}
+
+.moderation-actions .btn {
+  flex: 1;
+}
+
 /* Footer */
 .footer {
   text-align: center;
