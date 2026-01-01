@@ -114,10 +114,35 @@ let isCleaningDuplicates = false;
 
 console.log(`[BMaestro] Starting on ${browserType}`);
 
+// Force refresh extension icon using imageData (bypasses Chrome's icon cache)
+async function refreshIcon(): Promise<void> {
+  try {
+    // Fetch icon as blob and convert to imageData
+    const response = await fetch(chrome.runtime.getURL('icons/icon128.png'));
+    const blob = await response.blob();
+    const bitmap = await createImageBitmap(blob);
+
+    // Use OffscreenCanvas (available in service workers)
+    const canvas = new OffscreenCanvas(128, 128);
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(bitmap, 0, 0);
+      const imageData = ctx.getImageData(0, 0, 128, 128);
+
+      // Set icon using imageData - this bypasses file cache
+      await chrome.action.setIcon({ imageData });
+      console.log('[BMaestro] Icon refreshed via imageData');
+    }
+  } catch (err) {
+    console.error('[BMaestro] Failed to refresh icon:', err);
+  }
+}
+
 // Initialize client
 client.initialize().then(() => {
   console.log('[BMaestro] CloudClient initialized');
   setupAlarm();
+  refreshIcon(); // Force icon refresh on startup
 });
 
 // Set up periodic sync alarm

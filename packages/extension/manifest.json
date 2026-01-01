@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BMaestro Bookmark Sync",
-  "version": "1.10.5",
+  "version": "1.10.6",
   "description": "Sync bookmarks across Chrome, Brave, and Edge browsers",
   "update_url": "https://bmaestro-sync.fly.dev/update.xml",
   "permissions": [
