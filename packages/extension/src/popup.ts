@@ -1,5 +1,5 @@
 // packages/extension/src/popup.ts
-import { checkForUpdate, downloadUpdate } from './updater.js';
+import { checkForUpdate } from './updater.js';
 import { EXTENSION_VERSION } from './cloud/config.js';
 
 // Show notification in the popup
@@ -54,7 +54,18 @@ async function init(): Promise<void> {
         'lastSyncTime',
         'pendingOps',
         'isCanonical',
+        'preUpdateVersion',
       ]);
+
+      // Check if we just tried to update but version didn't change
+      if (stored.preUpdateVersion && stored.preUpdateVersion === EXTENSION_VERSION) {
+        // Update didn't work - auto-updater probably hasn't downloaded yet
+        showNotification('Update pending - auto-updater will download shortly. Try again in 2 min.', 'info');
+        await chrome.storage.local.remove('preUpdateVersion');
+      } else if (stored.preUpdateVersion) {
+        // Update worked! Clear the flag
+        await chrome.storage.local.remove('preUpdateVersion');
+      }
       console.log('[Popup] Loaded config:', { userId: stored.userId ? 'set' : 'not set', syncSecret: stored.syncSecret ? 'set' : 'not set', isCanonical: stored.isCanonical });
     } catch (err) {
       console.error('[Popup] Failed to load config:', err);
@@ -607,22 +618,18 @@ async function init(): Promise<void> {
       });
     }
 
-    // Update now button - downloads installer
+    // Update now button - reloads extension (auto-updater handles file download)
     if (updateNowBtn && updateBanner) {
       updateNowBtn.addEventListener('click', async () => {
         console.log('[Popup] Update now clicked');
-        try {
-          updateNowBtn.disabled = true;
-          updateNowBtn.textContent = 'Downloading...';
-          await downloadUpdate();
-          showNotification('Run bmaestro-update.cmd from Downloads, then reload extension', 'success');
-          updateNowBtn.textContent = 'Run Downloaded File';
-        } catch (err: any) {
-          console.error('[Popup] Update error:', err);
-          showNotification(`Download failed: ${err.message}`, 'error');
-          updateNowBtn.disabled = false;
-          updateNowBtn.textContent = 'Update Now';
-        }
+        updateNowBtn.disabled = true;
+        updateNowBtn.textContent = 'Reloading...';
+
+        // Store current version to check if update worked
+        await chrome.storage.local.set({ preUpdateVersion: EXTENSION_VERSION });
+
+        // Reload the extension - auto-updater should have downloaded new files
+        chrome.runtime.reload();
       });
     }
 
