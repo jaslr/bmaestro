@@ -111,3 +111,21 @@ fly deploy
 - `packages/sync-service/src/websocket/` - WebSocket handling
 - `packages/extension/src/background.ts` - Service worker
 - `packages/native-host/src/daemon.ts` - Persistent daemon
+
+## Extension Update Constraints
+
+**CRITICAL**: Extension updates must be FULLY AUTOMATIC. Never suggest:
+- Downloading a ZIP file manually
+- Extracting files manually
+- Moving/copying files manually
+- Running CMD/PowerShell scripts manually
+
+The user's extension is loaded from `%LOCALAPPDATA%\BMaestro\extension` which is accessible from WSL at `/mnt/c/Users/chip/AppData/Local/BMaestro/extension`.
+
+**To deploy extension updates:**
+1. Build: `npm run build --workspace=packages/extension`
+2. Deploy to Fly.io: `fly deploy --config packages/sync-service/fly.toml --dockerfile packages/sync-service/Dockerfile --now` (from repo root)
+3. Copy directly to Windows: `cp -r packages/extension/dist/* /mnt/c/Users/chip/AppData/Local/BMaestro/extension/`
+4. User just reloads the extension in browser
+
+No manual download/extract/move steps for the user.
