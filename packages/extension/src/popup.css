@@ -32,7 +32,7 @@ body {
 
 .popup {
   width: 320px;
-  padding: 16px;
+  padding: 16px 16px 8px 16px;
   background: var(--bg-base);
 }
 
@@ -144,6 +144,51 @@ h1 {
   height: 1px;
   background: var(--bg-elevated);
   margin: 4px 0;
+}
+
+/* Interval control in menu */
+.interval-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: default;
+}
+
+.interval-item:hover {
+  background: none;
+  color: inherit;
+}
+
+.interval-label {
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.interval-select {
+  padding: 4px 6px;
+  background: var(--bg-base);
+  border: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.interval-select:focus {
+  outline: none;
+  background: var(--bg-elevated);
+}
+
+/* Warning menu item */
+.warning-item {
+  color: var(--amber);
+}
+
+.warning-item:hover {
+  background: var(--amber-dim);
+  color: var(--bg-base);
 }
 
 /* Notifications */
@@ -549,11 +594,11 @@ h2 {
   left: 16px;
 }
 
-/* Tabs */
+/* Tabs - full width, no margins */
 .tabs-section {
   background: var(--bg-elevated);
   padding: 0;
-  margin-bottom: 12px;
+  margin: 0 -16px 12px -16px;
 }
 
 .tab-bar {
@@ -596,7 +641,7 @@ h2 {
 
 .tab-content {
   display: none;
-  padding: 12px;
+  padding: 12px 16px;
 }
 
 .tab-content.active {

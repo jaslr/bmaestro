@@ -65,9 +65,116 @@ export async function handleHttpRequest(
     return true;
   }
 
-  // Health check (no auth)
+  // Health check (no auth) - styled HTML page
   if (path === '/health') {
-    json(res, { status: 'ok', timestamp: new Date().toISOString() });
+    // Format timestamp in Sydney AU time
+    const now = new Date();
+    const sydneyTime = now.toLocaleString('en-AU', {
+      timeZone: 'Australia/Sydney',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).replace(',', '');
+
+    const uptime = process.uptime();
+    const uptimeStr = `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`;
+
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>BMaestro Service Status</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg-base: #0a0a0c;
+      --bg-elevated: #12141a;
+      --cyan: #00d4d4;
+      --cyan-dim: #007a7a;
+      --amber: #d4a000;
+      --text-primary: #e0e0e0;
+      --text-dim: #606068;
+    }
+    body {
+      font-family: 'JetBrains Mono', 'Consolas', monospace;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      background: var(--bg-elevated);
+      padding: 40px;
+      max-width: 480px;
+      width: 100%;
+    }
+    h1 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      margin-bottom: 32px;
+    }
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--bg-base);
+    }
+    .status-row:last-child { border-bottom: none; }
+    .label {
+      color: var(--text-dim);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .value {
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .value.ok { color: var(--cyan); }
+    .value.time { color: var(--text-primary); }
+    .footer {
+      margin-top: 32px;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>BMaestro Service Status</h1>
+    <div class="status-row">
+      <span class="label">Status</span>
+      <span class="value ok">● ONLINE</span>
+    </div>
+    <div class="status-row">
+      <span class="label">Last Check</span>
+      <span class="value time">${sydneyTime}</span>
+    </div>
+    <div class="status-row">
+      <span class="label">Uptime</span>
+      <span class="value time">${uptimeStr}</span>
+    </div>
+    <div class="status-row">
+      <span class="label">Region</span>
+      <span class="value time">Sydney (SYD)</span>
+    </div>
+    <div class="footer">bmaestro-sync.fly.dev</div>
+  </div>
+</body>
+</html>`);
     return true;
   }
 
