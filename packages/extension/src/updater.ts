@@ -48,28 +48,10 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-// Download update zip to downloads folder
+// Open the install/update page
 export async function downloadUpdate(): Promise<void> {
-  const downloadUrl = `${CLOUD_CONFIG.downloadUrl}/extension.zip`;
-
-  // Use chrome.downloads API
-  return new Promise((resolve, reject) => {
-    chrome.downloads.download(
-      {
-        url: downloadUrl,
-        filename: 'bmaestro-extension-update.zip',
-        saveAs: false,
-      },
-      (downloadId) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          console.log('[Updater] Download started, id:', downloadId);
-          resolve();
-        }
-      }
-    );
-  });
+  // Open install page with instructions
+  await chrome.tabs.create({ url: CLOUD_CONFIG.downloadUrl });
 }
 
 // These are no longer used but kept for backwards compatibility
