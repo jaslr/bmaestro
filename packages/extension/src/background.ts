@@ -23,6 +23,91 @@ const DEDUPE_TIMEOUT_MS = 2000;
 // Track recently synced IDs to prevent infinite loops
 const recentlySyncedIds = new Set<string>();
 
+// Folder type mapping - these are consistent folder names across browsers
+type FolderType = 'bookmarks-bar' | 'other-bookmarks' | 'mobile-bookmarks' | 'unknown';
+
+// Get the local browser's folder ID for a given folder type
+async function getLocalFolderIdByType(folderType: FolderType): Promise<string | null> {
+  const tree = await chrome.bookmarks.getTree();
+  const root = tree[0];
+
+  if (!root.children) return null;
+
+  for (const folder of root.children) {
+    // Chrome/Brave/Edge all have these folder types
+    // ID "1" is typically Bookmarks Bar, ID "2" is Other Bookmarks
+    // But we check by title/position to be safe
+    if (folder.title === 'Bookmarks Bar' || folder.title === 'Bookmarks bar') {
+      if (folderType === 'bookmarks-bar') return folder.id;
+    } else if (folder.title === 'Other Bookmarks' || folder.title === 'Other bookmarks') {
+      if (folderType === 'other-bookmarks') return folder.id;
+    } else if (folder.title === 'Mobile Bookmarks' || folder.title === 'Mobile bookmarks') {
+      if (folderType === 'mobile-bookmarks') return folder.id;
+    }
+  }
+
+  // Fallback: first child is usually bookmarks bar
+  if (folderType === 'bookmarks-bar' && root.children.length > 0) {
+    return root.children[0].id;
+  }
+
+  return null;
+}
+
+// Get folder type for a native folder ID
+async function getFolderTypeById(folderId: string): Promise<FolderType> {
+  try {
+    const [folder] = await chrome.bookmarks.get(folderId);
+    if (!folder) return 'unknown';
+
+    const title = folder.title.toLowerCase();
+    if (title.includes('bookmarks bar')) return 'bookmarks-bar';
+    if (title.includes('other bookmark')) return 'other-bookmarks';
+    if (title.includes('mobile bookmark')) return 'mobile-bookmarks';
+
+    // Check if it's a direct child of root (meaning it's a special folder)
+    if (folder.parentId === '0') {
+      // First child of root is typically bookmarks bar
+      const tree = await chrome.bookmarks.getTree();
+      const root = tree[0];
+      if (root.children && root.children[0]?.id === folderId) {
+        return 'bookmarks-bar';
+      }
+      if (root.children && root.children[1]?.id === folderId) {
+        return 'other-bookmarks';
+      }
+    }
+
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+// Resolve a parent ID from another browser to this browser's equivalent
+async function resolveParentId(foreignParentId: string, folderType?: FolderType): Promise<string> {
+  // If we have a folder type, use it to find the local equivalent
+  if (folderType && folderType !== 'unknown') {
+    const localId = await getLocalFolderIdByType(folderType);
+    if (localId) {
+      console.log(`[BMaestro] Resolved folder type ${folderType} to local ID ${localId}`);
+      return localId;
+    }
+  }
+
+  // Fallback: try common ID mappings
+  // All browsers typically use "1" for bookmarks bar, but check if it exists
+  try {
+    await chrome.bookmarks.get(foreignParentId);
+    return foreignParentId;
+  } catch {
+    // ID doesn't exist, fall back to bookmarks bar
+    const bookmarksBarId = await getLocalFolderIdByType('bookmarks-bar');
+    console.log(`[BMaestro] Parent ID ${foreignParentId} not found, falling back to bookmarks bar (${bookmarksBarId})`);
+    return bookmarksBarId || '1';
+  }
+}
+
 // Flag to prevent cleanup deletions from triggering sync
 let isCleaningDuplicates = false;
 
@@ -102,6 +187,7 @@ async function applyOperations(operations: SyncOperation[]): Promise<void> {
 async function applyAdd(op: SyncOperation): Promise<void> {
   const payload = op.payload as {
     parentNativeId: string;
+    folderType?: FolderType;
     title: string;
     url?: string;
     index?: number;
@@ -116,12 +202,30 @@ async function applyAdd(op: SyncOperation): Promise<void> {
     }
   }
 
-  await chrome.bookmarks.create({
-    parentId: payload.parentNativeId,
-    title: payload.title,
-    url: payload.url,
-    index: payload.index,
-  });
+  // Resolve parent ID - translate foreign browser's ID to local equivalent
+  const parentId = await resolveParentId(payload.parentNativeId, payload.folderType);
+  console.log(`[BMaestro] Creating bookmark in parent ${parentId} (original: ${payload.parentNativeId}, type: ${payload.folderType})`);
+
+  try {
+    await chrome.bookmarks.create({
+      parentId,
+      title: payload.title,
+      url: payload.url,
+      // Don't use index - it might conflict with existing bookmarks
+    });
+  } catch (err) {
+    console.error('[BMaestro] Failed to create bookmark:', err);
+    // Try creating in bookmarks bar as last resort
+    const fallbackId = await getLocalFolderIdByType('bookmarks-bar');
+    if (fallbackId && fallbackId !== parentId) {
+      console.log('[BMaestro] Retrying in bookmarks bar...');
+      await chrome.bookmarks.create({
+        parentId: fallbackId,
+        title: payload.title,
+        url: payload.url,
+      });
+    }
+  }
 }
 
 async function applyUpdate(op: SyncOperation): Promise<void> {
@@ -198,6 +302,9 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
 
   console.log('[BMaestro] Bookmark created:', id);
 
+  // Get folder type for cross-browser compatibility
+  const folderType = bookmark.parentId ? await getFolderTypeById(bookmark.parentId) : 'unknown';
+
   client.queueOperation({
     id: crypto.randomUUID(),
     opType: 'ADD',
@@ -205,6 +312,7 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
     payload: {
       nativeId: id,
       parentNativeId: bookmark.parentId,
+      folderType,
       title: bookmark.title,
       url: bookmark.url,
       index: bookmark.index,
@@ -426,10 +534,31 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
     const tree = await chrome.bookmarks.getTree();
     let count = 0;
 
+    // Build a map of folder ID -> folder type for quick lookup
+    const folderTypeMap = new Map<string, FolderType>();
+
+    // Identify root folders
+    const root = tree[0];
+    if (root.children) {
+      for (const folder of root.children) {
+        const title = folder.title.toLowerCase();
+        if (title.includes('bookmarks bar')) {
+          folderTypeMap.set(folder.id, 'bookmarks-bar');
+        } else if (title.includes('other bookmark')) {
+          folderTypeMap.set(folder.id, 'other-bookmarks');
+        } else if (title.includes('mobile bookmark')) {
+          folderTypeMap.set(folder.id, 'mobile-bookmarks');
+        }
+      }
+    }
+
     // Recursively process all bookmarks
     function processNode(node: chrome.bookmarks.BookmarkTreeNode): void {
       // Skip root nodes
       if (node.url) {
+        // Get folder type for the parent
+        const folderType = node.parentId ? (folderTypeMap.get(node.parentId) || 'unknown') : 'unknown';
+
         // It's a bookmark
         client.queueOperation({
           id: crypto.randomUUID(),
@@ -438,6 +567,7 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
           payload: {
             nativeId: node.id,
             parentNativeId: node.parentId,
+            folderType,
             title: node.title,
             url: node.url,
             index: node.index,
