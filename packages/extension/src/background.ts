@@ -138,13 +138,41 @@ async function applyUpdate(op: SyncOperation): Promise<void> {
 }
 
 async function applyDelete(op: SyncOperation): Promise<void> {
-  const payload = op.payload as { nativeId: string };
+  const payload = op.payload as { nativeId: string; url?: string; title?: string };
 
+  // Find bookmark by URL (since nativeId is browser-specific)
+  if (payload.url) {
+    const matches = await chrome.bookmarks.search({ url: payload.url });
+    if (matches.length > 0) {
+      // Delete the first match (or all matches with same URL)
+      for (const match of matches) {
+        try {
+          // Add to recently synced to prevent echo
+          recentlySyncedIds.add(match.id);
+          setTimeout(() => recentlySyncedIds.delete(match.id), DEDUPE_TIMEOUT_MS);
+
+          await chrome.bookmarks.remove(match.id);
+          console.log('[BMaestro] Deleted bookmark by URL:', payload.url, 'id:', match.id);
+        } catch (err) {
+          console.error('[BMaestro] Failed to delete bookmark:', match.id, err);
+        }
+      }
+      return;
+    }
+    console.log('[BMaestro] Bookmark not found for deletion:', payload.url);
+    return;
+  }
+
+  // Fallback: try by nativeId (only works if same browser instance)
   try {
     await chrome.bookmarks.remove(payload.nativeId);
   } catch {
     // Try removing as tree (folder)
-    await chrome.bookmarks.removeTree(payload.nativeId);
+    try {
+      await chrome.bookmarks.removeTree(payload.nativeId);
+    } catch {
+      console.log('[BMaestro] Could not delete bookmark:', payload.nativeId);
+    }
   }
 }
 
@@ -217,8 +245,9 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
     return;
   }
 
-  console.log('[BMaestro] Bookmark removed:', id);
+  console.log('[BMaestro] Bookmark removed:', id, removeInfo.node);
 
+  // Include URL and title so other browsers can find the bookmark to delete
   client.queueOperation({
     id: crypto.randomUUID(),
     opType: 'DELETE',
@@ -226,6 +255,8 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
     payload: {
       nativeId: id,
       parentNativeId: removeInfo.parentId,
+      url: removeInfo.node.url,
+      title: removeInfo.node.title,
     },
     timestamp: new Date().toISOString(),
   });
