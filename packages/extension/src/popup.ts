@@ -654,7 +654,7 @@ async function init(): Promise<void> {
     // Check for updates (don't let this block other functionality)
     if (updateBanner && newVersionEl) {
       checkForUpdate()
-        .then((updateInfo) => {
+        .then(async (updateInfo) => {
           if (updateInfo.updateAvailable) {
             newVersionEl.textContent = `v${updateInfo.latestVersion}`;
             updateBanner.classList.remove('hidden');
@@ -662,6 +662,10 @@ async function init(): Promise<void> {
             if (reloadExtensionBtn) {
               reloadExtensionBtn.classList.remove('hidden');
             }
+          } else {
+            // No update available - clear any stale badge/storage
+            await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload']);
+            chrome.action.setBadgeText({ text: '' });
           }
         })
         .catch((err) => {

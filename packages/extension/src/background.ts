@@ -191,11 +191,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         // Auto-download the extension zip to Downloads folder
         await autoDownloadUpdate();
       } else {
-        // Clear update badge if no update
-        const stored = await chrome.storage.local.get(['updateAvailable']);
-        if (!stored.updateAvailable) {
-          chrome.action.setBadgeText({ text: '' });
-        }
+        // No update available - clear badge and stale storage
+        await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload']);
+        chrome.action.setBadgeText({ text: '' });
       }
     } catch (err) {
       console.error('[BMaestro] Update check failed:', err);
