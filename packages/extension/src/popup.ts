@@ -233,13 +233,27 @@ async function init(): Promise<void> {
         });
 
         if (response.ok) {
-          showNotification(`Deletion ${action}ed`, 'success');
-          loadModerations();
+          const result = await response.json();
+          const item = result.deleted || result.rejected;
 
-          // If rejected, trigger sync to restore bookmark
-          if (action === 'reject') {
+          if (action === 'accept' && item?.url) {
+            // Check if bookmark exists locally and delete it
+            const existing = await chrome.bookmarks.search({ url: item.url });
+            if (existing.length > 0) {
+              for (const bookmark of existing) {
+                await chrome.bookmarks.remove(bookmark.id);
+              }
+              showNotification(`Deleted "${item.title || 'bookmark'}" from this browser`, 'success');
+            } else {
+              showNotification(`Accepted (wasn't in this browser)`, 'info');
+            }
+          } else if (action === 'reject') {
+            showNotification(`Rejected - bookmark will stay`, 'success');
+            // Trigger sync to restore bookmark in the other browser
             chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
           }
+
+          loadModerations();
         } else {
           showNotification(`Failed to ${action}`, 'error');
         }
