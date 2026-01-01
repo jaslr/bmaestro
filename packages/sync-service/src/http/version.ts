@@ -1,18 +1,33 @@
 import { IncomingMessage, ServerResponse } from 'http';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-// Read version from package.json at startup
+// Read version from extension manifest at startup
 let extensionVersion = '1.0.0';
-try {
-  // In production, extension package.json is baked into the zip
-  // We'll use the sync-service version as the canonical version
-  const pkgPath = join(process.cwd(), 'packages', 'sync-service', 'package.json');
-  const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-  extensionVersion = pkg.version;
-} catch {
-  // Fallback - try reading from environment
-  extensionVersion = process.env.EXTENSION_VERSION || '1.0.0';
+
+// In Docker, extension manifest is at /app/extension/manifest.json
+const extensionDir = process.env.EXTENSION_DIR || '/app/extension';
+const manifestPath = join(extensionDir, 'manifest.json');
+
+if (existsSync(manifestPath)) {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    extensionVersion = manifest.version;
+    console.log(`[Version] Loaded extension version ${extensionVersion} from ${manifestPath}`);
+  } catch (err) {
+    console.error('[Version] Failed to read extension manifest:', err);
+  }
+} else {
+  // Fallback for local dev
+  try {
+    const localManifest = join(process.cwd(), 'packages', 'extension', 'manifest.json');
+    if (existsSync(localManifest)) {
+      const manifest = JSON.parse(readFileSync(localManifest, 'utf-8'));
+      extensionVersion = manifest.version;
+    }
+  } catch {
+    extensionVersion = process.env.EXTENSION_VERSION || '1.0.0';
+  }
 }
 
 export function getExtensionVersion(): string {
