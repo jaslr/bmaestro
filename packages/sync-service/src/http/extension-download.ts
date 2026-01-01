@@ -328,6 +328,72 @@ export function handleExtensionDownload(
     return true;
   }
 
+  // Download quick install CMD (for in-app update button)
+  // This is a self-contained batch file that downloads and installs the update
+  if (url === '/download/install.cmd') {
+    const installCmd = `@echo off
+setlocal EnableDelayedExpansion
+
+echo.
+echo ================================
+echo   BMaestro Update Installer
+echo ================================
+echo.
+
+set "INSTALL_DIR=%LOCALAPPDATA%\\BMaestro\\extension"
+set "TEMP_ZIP=%TEMP%\\bmaestro-update.zip"
+set "DOWNLOAD_URL=https://bmaestro-sync.fly.dev/download/extension.zip"
+
+echo Downloading update...
+powershell -Command "Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%TEMP_ZIP%' -UseBasicParsing"
+if errorlevel 1 (
+    echo Download failed!
+    pause
+    exit /b 1
+)
+
+echo Removing old version...
+if exist "%INSTALL_DIR%" (
+    rd /s /q "%INSTALL_DIR%"
+)
+mkdir "%INSTALL_DIR%"
+
+echo Extracting...
+powershell -Command "Expand-Archive -Path '%TEMP_ZIP%' -DestinationPath '%INSTALL_DIR%' -Force"
+if errorlevel 1 (
+    echo Extraction failed!
+    pause
+    exit /b 1
+)
+
+del "%TEMP_ZIP%" 2>nul
+
+:: Get version from manifest
+for /f "tokens=2 delims=:," %%a in ('type "%INSTALL_DIR%\\manifest.json" ^| findstr "version"') do (
+    set "VERSION=%%~a"
+    set "VERSION=!VERSION: =!"
+    set "VERSION=!VERSION:"=!"
+)
+
+echo.
+echo ================================
+echo   SUCCESS! Updated to v!VERSION!
+echo ================================
+echo.
+echo Now reload the extension in each browser:
+echo   - Go to chrome://extensions (or brave:// or edge://)
+echo   - Click the refresh icon on BMaestro
+echo.
+pause
+`;
+    res.writeHead(200, {
+      'Content-Type': 'application/x-msdos-program',
+      'Content-Disposition': 'attachment; filename="bmaestro-update.cmd"',
+    });
+    res.end(installCmd);
+    return true;
+  }
+
   // Installation instructions page
   if (url === '/download' || url === '/install') {
     res.writeHead(200, { 'Content-Type': 'text/html' });

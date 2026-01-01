@@ -48,10 +48,19 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-// Open the install/update page
+// Download and run the installer
 export async function downloadUpdate(): Promise<void> {
-  // Open install page with instructions
-  await chrome.tabs.create({ url: CLOUD_CONFIG.downloadUrl });
+  // Download a self-contained installer that extracts to the right place
+  const downloadId = await chrome.downloads.download({
+    url: `${CLOUD_CONFIG.downloadUrl}/install.cmd`,
+    filename: 'bmaestro-update.cmd',
+    saveAs: false,
+  });
+
+  // Open the downloads folder after a short delay
+  setTimeout(() => {
+    chrome.downloads.showDefaultFolder();
+  }, 1000);
 }
 
 // These are no longer used but kept for backwards compatibility

@@ -544,7 +544,7 @@ async function init(): Promise<void> {
       });
     }
 
-    // Update now button - downloads update zip
+    // Update now button - downloads installer
     if (updateNowBtn && updateBanner) {
       updateNowBtn.addEventListener('click', async () => {
         console.log('[Popup] Update now clicked');
@@ -552,13 +552,13 @@ async function init(): Promise<void> {
           updateNowBtn.disabled = true;
           updateNowBtn.textContent = 'Downloading...';
           await downloadUpdate();
-          showNotification('Download started - extract zip and reload extension', 'success');
+          showNotification('Run bmaestro-update.cmd from Downloads, then reload extension', 'success');
+          updateNowBtn.textContent = 'Run Downloaded File';
         } catch (err: any) {
           console.error('[Popup] Update error:', err);
           showNotification(`Download failed: ${err.message}`, 'error');
-        } finally {
           updateNowBtn.disabled = false;
-          updateNowBtn.textContent = 'Download Update';
+          updateNowBtn.textContent = 'Update Now';
         }
       });
     }
