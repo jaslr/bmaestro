@@ -3,6 +3,7 @@ import './shim.js';
 
 import { CloudClient } from './cloud/client.js';
 import { buildBookmarkTree } from './bookmarks/tree-builder.js';
+import { checkForUpdate } from './updater.js';
 import type { BrowserType, SyncOperation } from '@bmaestro/shared/types';
 
 // Detect browser type
@@ -135,15 +136,72 @@ async function setupAlarm(): Promise<void> {
   console.log(`[BMaestro] Sync alarm set for every ${intervalMinutes} minutes`);
 }
 
-// Handle alarm
-chrome.alarms.onAlarm.addListener((alarm) => {
+// Handle alarm - sync bookmarks AND check for updates
+chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
-    console.log('[BMaestro] Alarm triggered, syncing...');
+    console.log('[BMaestro] Alarm triggered, syncing and checking updates...');
+
+    // Sync bookmarks
     client.sync().catch(err => {
       console.error('[BMaestro] Sync failed:', err);
     });
+
+    // Check for extension updates
+    try {
+      const updateInfo = await checkForUpdate();
+      if (updateInfo.updateAvailable) {
+        console.log(`[BMaestro] Update available: ${updateInfo.currentVersion} -> ${updateInfo.latestVersion}`);
+
+        // Store update info for popup
+        await chrome.storage.local.set({
+          updateAvailable: true,
+          latestVersion: updateInfo.latestVersion,
+          updateDownloadUrl: updateInfo.downloadUrl,
+        });
+
+        // Set badge to indicate update
+        chrome.action.setBadgeText({ text: '!' });
+        chrome.action.setBadgeBackgroundColor({ color: '#03FFE3' });
+
+        // Auto-download the extension zip to Downloads folder
+        await autoDownloadUpdate();
+      } else {
+        // Clear update badge if no update
+        const stored = await chrome.storage.local.get(['updateAvailable']);
+        if (!stored.updateAvailable) {
+          chrome.action.setBadgeText({ text: '' });
+        }
+      }
+    } catch (err) {
+      console.error('[BMaestro] Update check failed:', err);
+    }
   }
 });
+
+// Auto-download extension update to Downloads folder
+async function autoDownloadUpdate(): Promise<void> {
+  try {
+    // Check if we already downloaded recently (within last hour)
+    const stored = await chrome.storage.local.get(['lastUpdateDownload']);
+    const now = Date.now();
+    if (stored.lastUpdateDownload && (now - stored.lastUpdateDownload) < 3600000) {
+      console.log('[BMaestro] Update already downloaded recently, skipping');
+      return;
+    }
+
+    // Download the extension zip
+    const downloadId = await chrome.downloads.download({
+      url: 'https://bmaestro-sync.fly.dev/download/extension.zip',
+      filename: 'bmaestro-extension-update.zip',
+      saveAs: false,
+    });
+
+    console.log('[BMaestro] Started update download:', downloadId);
+    await chrome.storage.local.set({ lastUpdateDownload: now });
+  } catch (err) {
+    console.error('[BMaestro] Auto-download failed:', err);
+  }
+}
 
 // Listen for incoming sync operations
 client.onSync((operations) => {
@@ -486,6 +544,57 @@ async function cleanDuplicates(): Promise<{ removed: number; kept: number }> {
 // Handle messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[BMaestro] Received message:', message.type);
+
+  // Combined sync + update check
+  if (message.type === 'UPDATE_AND_SYNC') {
+    (async () => {
+      try {
+        // Step 1: Sync bookmarks
+        console.log('[BMaestro] UPDATE_AND_SYNC: Syncing bookmarks...');
+        const syncResult = await client.sync();
+
+        // Step 2: Check for updates
+        console.log('[BMaestro] UPDATE_AND_SYNC: Checking for updates...');
+        const updateInfo = await checkForUpdate();
+
+        if (updateInfo.updateAvailable) {
+          // Store update info
+          await chrome.storage.local.set({
+            updateAvailable: true,
+            latestVersion: updateInfo.latestVersion,
+            updateDownloadUrl: updateInfo.downloadUrl,
+          });
+
+          // Download update
+          await autoDownloadUpdate();
+
+          sendResponse({
+            success: true,
+            syncSuccess: syncResult.success,
+            updateAvailable: true,
+            currentVersion: updateInfo.currentVersion,
+            latestVersion: updateInfo.latestVersion,
+          });
+        } else {
+          // Clear update flag
+          await chrome.storage.local.set({ updateAvailable: false });
+          chrome.action.setBadgeText({ text: '' });
+
+          sendResponse({
+            success: true,
+            syncSuccess: syncResult.success,
+            updateAvailable: false,
+            currentVersion: updateInfo.currentVersion,
+            latestVersion: updateInfo.latestVersion,
+          });
+        }
+      } catch (err: any) {
+        console.error('[BMaestro] UPDATE_AND_SYNC failed:', err);
+        sendResponse({ success: false, error: err.message || String(err) });
+      }
+    })();
+    return true; // Keep channel open
+  }
 
   if (message.type === 'CLEAN_DUPLICATES') {
     console.log('[BMaestro] Starting clean duplicates handler...');

@@ -449,10 +449,10 @@ async function init(): Promise<void> {
       });
     }
 
-    // Sync now button
+    // Sync now button - does BOTH sync AND update check
     if (syncNowBtn) {
       syncNowBtn.addEventListener('click', async () => {
-        console.log('[Popup] Sync now clicked');
+        console.log('[Popup] Sync now clicked - doing sync + update check');
 
         if (!stored.userId || !stored.syncSecret) {
           showNotification('Please configure User ID and Sync Secret first', 'error');
@@ -467,13 +467,31 @@ async function init(): Promise<void> {
         }
 
         try {
-          const response = await chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
-          console.log('[Popup] Sync response:', response);
+          // Use UPDATE_AND_SYNC to do both sync + update check
+          const response = await chrome.runtime.sendMessage({ type: 'UPDATE_AND_SYNC' });
+          console.log('[Popup] Sync + Update response:', response);
 
           if (response?.success) {
-            showNotification('Sync complete!', 'success');
+            if (response.syncSuccess) {
+              showNotification('Sync complete!', 'success');
+            }
+
+            // Handle update notification
+            if (response.updateAvailable) {
+              showNotification(`Update v${response.latestVersion} downloading...`, 'info');
+              if (newVersionEl) {
+                newVersionEl.textContent = `v${response.latestVersion}`;
+              }
+              if (updateBanner) {
+                updateBanner.classList.remove('hidden');
+              }
+              if (reloadExtensionBtn) {
+                reloadExtensionBtn.classList.remove('hidden');
+              }
+            }
+
             if (statusEl) {
-              statusEl.textContent = 'Sync complete';
+              statusEl.textContent = response.updateAvailable ? 'Update available' : 'Sync complete';
               statusEl.className = 'value connected';
             }
           } else {
@@ -500,7 +518,7 @@ async function init(): Promise<void> {
         }
 
         syncNowBtn.disabled = false;
-        syncNowBtn.textContent = 'Sync Changes';
+        syncNowBtn.textContent = 'Sync & Check Updates';
       });
     }
 
