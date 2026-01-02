@@ -1,6 +1,6 @@
 // packages/extension/src/popup.ts
-import { checkForUpdate } from './updater.js';
 import { EXTENSION_VERSION } from './cloud/config.js';
+import { CLOUD_CONFIG } from './cloud/config.js';
 
 // Show notification in the popup
 function showNotification(message: string, type: 'success' | 'error' | 'info' = 'info'): void {
@@ -28,8 +28,7 @@ async function init(): Promise<void> {
     const versionEl = document.getElementById('version');
     const updateBanner = document.getElementById('updateBanner');
     const newVersionEl = document.getElementById('newVersion');
-    const updateNowBtn = document.getElementById('updateNow') as HTMLButtonElement | null;
-        const statusEl = document.getElementById('status');
+    const statusEl = document.getElementById('status');
     const lastSyncEl = document.getElementById('lastSync');
     const pendingEl = document.getElementById('pending');
     const syncNowBtn = document.getElementById('syncNow') as HTMLButtonElement | null;
@@ -54,18 +53,7 @@ async function init(): Promise<void> {
         'lastSyncTime',
         'pendingOps',
         'isCanonical',
-        'preUpdateVersion',
       ]);
-
-      // Check if we just tried to update but version didn't change
-      if (stored.preUpdateVersion && stored.preUpdateVersion === EXTENSION_VERSION) {
-        // Update didn't work - auto-updater probably hasn't downloaded yet
-        showNotification('Update pending - auto-updater will download shortly. Try again in 2 min.', 'info');
-        await chrome.storage.local.remove('preUpdateVersion');
-      } else if (stored.preUpdateVersion) {
-        // Update worked! Clear the flag
-        await chrome.storage.local.remove('preUpdateVersion');
-      }
       console.log('[Popup] Loaded config:', { userId: stored.userId ? 'set' : 'not set', syncSecret: stored.syncSecret ? 'set' : 'not set', isCanonical: stored.isCanonical });
     } catch (err) {
       console.error('[Popup] Failed to load config:', err);
@@ -449,10 +437,10 @@ async function init(): Promise<void> {
       });
     }
 
-    // Sync now button - does BOTH sync AND update check
+    // Sync now button
     if (syncNowBtn) {
       syncNowBtn.addEventListener('click', async () => {
-        console.log('[Popup] Sync now clicked - doing sync + update check');
+        console.log('[Popup] Sync now clicked');
 
         if (!stored.userId || !stored.syncSecret) {
           showNotification('Please configure User ID and Sync Secret first', 'error');
@@ -467,31 +455,13 @@ async function init(): Promise<void> {
         }
 
         try {
-          // Use UPDATE_AND_SYNC to do both sync + update check
-          const response = await chrome.runtime.sendMessage({ type: 'UPDATE_AND_SYNC' });
-          console.log('[Popup] Sync + Update response:', response);
+          const response = await chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
+          console.log('[Popup] Sync response:', response);
 
           if (response?.success) {
-            if (response.syncSuccess) {
-              showNotification('Sync complete!', 'success');
-            }
-
-            // Handle update notification
-            if (response.updateAvailable) {
-              showNotification(`Update v${response.latestVersion} downloading...`, 'info');
-              if (newVersionEl) {
-                newVersionEl.textContent = `v${response.latestVersion}`;
-              }
-              if (updateBanner) {
-                updateBanner.classList.remove('hidden');
-              }
-              if (reloadExtensionBtn) {
-                reloadExtensionBtn.classList.remove('hidden');
-              }
-            }
-
+            showNotification('Sync complete!', 'success');
             if (statusEl) {
-              statusEl.textContent = response.updateAvailable ? 'Update available' : 'Sync complete';
+              statusEl.textContent = 'Sync complete';
               statusEl.className = 'value connected';
             }
           } else {
@@ -518,7 +488,7 @@ async function init(): Promise<void> {
         }
 
         syncNowBtn.disabled = false;
-        syncNowBtn.textContent = 'Sync & Check Updates';
+        syncNowBtn.textContent = 'Sync Now';
       });
     }
 
@@ -636,36 +606,14 @@ async function init(): Promise<void> {
       });
     }
 
-    // Update now button - reloads extension (auto-updater handles file download)
-    if (updateNowBtn && updateBanner) {
-      updateNowBtn.addEventListener('click', async () => {
-        console.log('[Popup] Update now clicked');
-        updateNowBtn.disabled = true;
-        updateNowBtn.textContent = 'Reloading...';
-
-        // Store current version to check if update worked
-        await chrome.storage.local.set({ preUpdateVersion: EXTENSION_VERSION });
-
-        // Reload the extension - auto-updater should have downloaded new files
-        chrome.runtime.reload();
-      });
-    }
-
-    // Check for updates (don't let this block other functionality)
+    // Check for updates (informational only - Chrome handles auto-update)
     if (updateBanner && newVersionEl) {
-      checkForUpdate()
-        .then(async (updateInfo) => {
-          if (updateInfo.updateAvailable) {
-            newVersionEl.textContent = `v${updateInfo.latestVersion}`;
+      fetch(CLOUD_CONFIG.versionUrl)
+        .then(res => res.json())
+        .then(data => {
+          if (data.version && data.version !== EXTENSION_VERSION) {
+            newVersionEl.textContent = `v${data.version}`;
             updateBanner.classList.remove('hidden');
-            // Show reload button in header
-            if (reloadExtensionBtn) {
-              reloadExtensionBtn.classList.remove('hidden');
-            }
-          } else {
-            // No update available - clear any stale badge/storage
-            await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload']);
-            chrome.action.setBadgeText({ text: '' });
           }
         })
         .catch((err) => {
@@ -733,15 +681,6 @@ async function init(): Promise<void> {
       loadActivity();
       // Always load moderation count for badge
       loadModerations();
-    }
-
-    // Reload Extension button (shown only when update available)
-    const reloadExtensionBtn = document.getElementById('reloadExtension') as HTMLButtonElement | null;
-    if (reloadExtensionBtn) {
-      reloadExtensionBtn.addEventListener('click', () => {
-        console.log('[Popup] Reload extension clicked');
-        chrome.runtime.reload();
-      });
     }
 
     // Settings menu

@@ -9,7 +9,6 @@
     <header class="header">
       <h1>BMaestro <span id="version" class="version"></span></h1>
       <div class="header-actions">
-        <button id="reloadExtension" class="icon-btn reload-btn hidden" title="Reload to apply update">↻</button>
         <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
       </div>
     </header>
@@ -41,10 +40,7 @@
 
     <div id="updateBanner" class="update-banner hidden">
       <div class="update-info">
-        <span>Update available: <strong id="newVersion"></strong></span>
-      </div>
-      <div class="update-actions">
-        <button id="updateNow" class="update-btn">Reload to Update</button>
+        <span>Update <strong id="newVersion"></strong> available - will install automatically</span>
       </div>
     </div>
 
@@ -64,7 +60,7 @@
     </div>
 
     <div class="controls-section">
-      <button id="syncNow" class="btn primary">Sync & Check Updates</button>
+      <button id="syncNow" class="btn primary">Sync Now</button>
       <button id="fullSync" class="btn">Full Sync (Export All)</button>
     </div>
 
