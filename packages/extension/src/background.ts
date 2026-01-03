@@ -184,12 +184,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
           updateDownloadUrl: updateInfo.downloadUrl,
         });
 
-        // Set badge to indicate update
+        // Set badge to indicate update - Chrome handles actual update delivery
         chrome.action.setBadgeText({ text: '!' });
         chrome.action.setBadgeBackgroundColor({ color: '#03FFE3' });
-
-        // Auto-download the extension zip to Downloads folder
-        await autoDownloadUpdate();
       } else {
         // No update available - clear badge and stale storage
         await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload']);
@@ -201,30 +198,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// Auto-download extension update to Downloads folder
-async function autoDownloadUpdate(): Promise<void> {
-  try {
-    // Check if we already downloaded recently (within last hour)
-    const stored = await chrome.storage.local.get(['lastUpdateDownload']);
-    const now = Date.now();
-    if (stored.lastUpdateDownload && (now - stored.lastUpdateDownload) < 3600000) {
-      console.log('[BMaestro] Update already downloaded recently, skipping');
-      return;
-    }
-
-    // Download the extension zip
-    const downloadId = await chrome.downloads.download({
-      url: 'https://bmaestro-sync.fly.dev/download/extension.zip',
-      filename: 'bmaestro-extension-update.zip',
-      saveAs: false,
-    });
-
-    console.log('[BMaestro] Started update download:', downloadId);
-    await chrome.storage.local.set({ lastUpdateDownload: now });
-  } catch (err) {
-    console.error('[BMaestro] Auto-download failed:', err);
-  }
-}
 
 // Listen for incoming sync operations
 client.onSync((operations) => {
