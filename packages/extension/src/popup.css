@@ -181,6 +181,51 @@ h1 {
   background: var(--bg-elevated);
 }
 
+/* Version item in menu */
+.version-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: default;
+}
+
+.version-item:hover {
+  background: none;
+  color: inherit;
+}
+
+.menu-version {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.menu-version.has-update {
+  color: var(--cyan);
+}
+
+.check-update-btn {
+  padding: 3px 8px;
+  background: var(--bg-base);
+  border: none;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.check-update-btn:hover {
+  color: var(--cyan);
+  background: var(--bg-elevated);
+}
+
+.check-update-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 /* Warning menu item */
 .warning-item {
   color: var(--amber);

@@ -38,9 +38,13 @@ async function init(): Promise<void> {
     const syncSecretInput = document.getElementById('syncSecret') as HTMLInputElement | null;
     const saveConfigBtn = document.getElementById('saveConfig') as HTMLButtonElement | null;
     
-    // Show current version
+    // Show current version in header and menu
     if (versionEl) {
       versionEl.textContent = `v${EXTENSION_VERSION}`;
+    }
+    const menuVersionEl = document.getElementById('menuVersion');
+    if (menuVersionEl) {
+      menuVersionEl.textContent = `v${EXTENSION_VERSION}`;
     }
 
     // Load stored config first
@@ -606,7 +610,44 @@ async function init(): Promise<void> {
       });
     }
 
-    // Check for updates (informational only - Chrome handles auto-update)
+    // Check for updates function
+    async function checkForUpdates(): Promise<void> {
+      try {
+        const res = await fetch(CLOUD_CONFIG.versionUrl);
+        const data = await res.json();
+        if (data.version && data.version !== EXTENSION_VERSION) {
+          if (newVersionEl) newVersionEl.textContent = `v${data.version}`;
+          if (updateBanner) updateBanner.classList.remove('hidden');
+          if (menuVersionEl) {
+            menuVersionEl.textContent = `v${EXTENSION_VERSION} (${data.version} available)`;
+            menuVersionEl.classList.add('has-update');
+          }
+          showNotification(`Update ${data.version} available`, 'info');
+        } else {
+          if (menuVersionEl) {
+            menuVersionEl.textContent = `v${EXTENSION_VERSION} (latest)`;
+          }
+          showNotification('You have the latest version', 'success');
+        }
+      } catch (err) {
+        console.error('[Popup] Check update error:', err);
+        showNotification('Failed to check for updates', 'error');
+      }
+    }
+
+    // Check for updates button in menu
+    const checkUpdateBtn = document.getElementById('checkUpdateBtn') as HTMLButtonElement | null;
+    if (checkUpdateBtn) {
+      checkUpdateBtn.addEventListener('click', async () => {
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = '...';
+        await checkForUpdates();
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.textContent = 'Check';
+      });
+    }
+
+    // Auto-check for updates on popup open (informational only - Chrome handles auto-update)
     if (updateBanner && newVersionEl) {
       fetch(CLOUD_CONFIG.versionUrl)
         .then(res => res.json())
@@ -614,6 +655,10 @@ async function init(): Promise<void> {
           if (data.version && data.version !== EXTENSION_VERSION) {
             newVersionEl.textContent = `v${data.version}`;
             updateBanner.classList.remove('hidden');
+            if (menuVersionEl) {
+              menuVersionEl.textContent = `v${EXTENSION_VERSION} (${data.version} available)`;
+              menuVersionEl.classList.add('has-update');
+            }
           }
         })
         .catch((err) => {
