@@ -242,30 +242,67 @@ async function applyAdd(op: SyncOperation): Promise<void> {
   const payload = op.payload as {
     parentNativeId: string;
     folderType?: FolderType;
+    folderPath?: string; // New: path like "Bookmarks Bar/Work/Projects"
     title: string;
     url?: string;
     index?: number;
+    isFolder?: boolean;
   };
 
-  // Skip if no URL (folder) or check for existing bookmark with same URL
-  if (payload.url) {
-    const existing = await chrome.bookmarks.search({ url: payload.url });
-    if (existing.length > 0) {
-      console.log('[BMaestro] Skipping duplicate bookmark:', payload.url);
+  // Handle folders - create them if they don't exist
+  if (payload.isFolder || !payload.url) {
+    console.log(`[BMaestro] Processing folder: ${payload.title}, path: ${payload.folderPath}`);
+
+    // Resolve parent folder by path
+    const parentId = await resolveParentByPath(payload.folderPath, payload.folderType);
+    if (!parentId) {
+      console.log('[BMaestro] Could not resolve parent for folder:', payload.title);
       return;
     }
+
+    // Check if folder already exists in parent
+    const parent = await chrome.bookmarks.getSubTree(parentId);
+    const existingFolder = parent[0].children?.find(
+      c => !c.url && c.title.toLowerCase() === payload.title.toLowerCase()
+    );
+
+    if (existingFolder) {
+      console.log('[BMaestro] Folder already exists:', payload.title);
+      return;
+    }
+
+    // Create the folder
+    try {
+      await chrome.bookmarks.create({
+        parentId,
+        title: payload.title,
+      });
+      console.log('[BMaestro] Created folder:', payload.title);
+    } catch (err) {
+      console.error('[BMaestro] Failed to create folder:', err);
+    }
+    return;
   }
 
-  // Resolve parent ID - translate foreign browser's ID to local equivalent
-  const parentId = await resolveParentId(payload.parentNativeId, payload.folderType);
-  console.log(`[BMaestro] Creating bookmark in parent ${parentId} (original: ${payload.parentNativeId}, type: ${payload.folderType})`);
+  // Handle bookmarks - check for duplicates
+  const existing = await chrome.bookmarks.search({ url: payload.url });
+  if (existing.length > 0) {
+    console.log('[BMaestro] Skipping duplicate bookmark:', payload.url);
+    return;
+  }
+
+  // Resolve parent ID by path first, then fall back to folder type
+  let parentId = await resolveParentByPath(payload.folderPath, payload.folderType);
+  if (!parentId) {
+    parentId = await resolveParentId(payload.parentNativeId, payload.folderType);
+  }
+  console.log(`[BMaestro] Creating bookmark in parent ${parentId} (path: ${payload.folderPath}, type: ${payload.folderType})`);
 
   try {
     await chrome.bookmarks.create({
       parentId,
       title: payload.title,
       url: payload.url,
-      // Don't use index - it might conflict with existing bookmarks
     });
   } catch (err) {
     console.error('[BMaestro] Failed to create bookmark:', err);
@@ -280,6 +317,85 @@ async function applyAdd(op: SyncOperation): Promise<void> {
       });
     }
   }
+}
+
+// Resolve parent folder by path (e.g., "Bookmarks Bar/Work/Projects")
+async function resolveParentByPath(folderPath?: string, folderType?: FolderType): Promise<string | null> {
+  if (!folderPath) return null;
+
+  const parts = folderPath.split('/').filter(p => p.trim());
+  if (parts.length === 0) return null;
+
+  const tree = await chrome.bookmarks.getTree();
+  const root = tree[0];
+  if (!root.children) return null;
+
+  // First part should be a root folder type
+  const rootName = parts[0].toLowerCase();
+  let currentFolder: chrome.bookmarks.BookmarkTreeNode | undefined;
+
+  for (const folder of root.children) {
+    const title = folder.title.toLowerCase();
+    if (rootName.includes('bookmarks bar') || rootName.includes('bookmark bar')) {
+      if (title.includes('bookmarks bar') || title.includes('bookmark bar')) {
+        currentFolder = folder;
+        break;
+      }
+    } else if (rootName.includes('other bookmark')) {
+      if (title.includes('other bookmark')) {
+        currentFolder = folder;
+        break;
+      }
+    } else if (rootName.includes('mobile bookmark')) {
+      if (title.includes('mobile bookmark')) {
+        currentFolder = folder;
+        break;
+      }
+    }
+  }
+
+  // Fallback: use folderType if root not found by name
+  if (!currentFolder && folderType) {
+    const localId = await getLocalFolderIdByType(folderType);
+    if (localId) {
+      const [folder] = await chrome.bookmarks.get(localId);
+      if (folder) {
+        // Get full subtree
+        const subtree = await chrome.bookmarks.getSubTree(localId);
+        currentFolder = subtree[0];
+      }
+    }
+  }
+
+  if (!currentFolder) return null;
+
+  // Navigate/create remaining path parts
+  for (let i = 1; i < parts.length; i++) {
+    const partName = parts[i];
+
+    // Get fresh subtree for current folder
+    const subtree = await chrome.bookmarks.getSubTree(currentFolder.id);
+    const children = subtree[0].children || [];
+
+    // Find matching child folder (case-insensitive)
+    let childFolder = children.find(
+      c => !c.url && c.title.toLowerCase() === partName.toLowerCase()
+    );
+
+    // Create folder if it doesn't exist
+    if (!childFolder) {
+      console.log(`[BMaestro] Creating folder "${partName}" in ${currentFolder.title}`);
+      const created = await chrome.bookmarks.create({
+        parentId: currentFolder.id,
+        title: partName,
+      });
+      childFolder = created;
+    }
+
+    currentFolder = childFolder;
+  }
+
+  return currentFolder.id;
 }
 
 async function applyUpdate(op: SyncOperation): Promise<void> {
@@ -347,6 +463,30 @@ async function applyMove(op: SyncOperation): Promise<void> {
   });
 }
 
+// Get full folder path for a folder ID
+async function getFolderPath(folderId: string): Promise<string | undefined> {
+  try {
+    const pathParts: string[] = [];
+    let currentId = folderId;
+
+    while (currentId && currentId !== '0') {
+      const [node] = await chrome.bookmarks.get(currentId);
+      if (!node) break;
+
+      pathParts.unshift(node.title);
+      currentId = node.parentId || '';
+
+      // Stop at root level (parentId === '0')
+      if (node.parentId === '0') break;
+    }
+
+    return pathParts.length > 0 ? pathParts.join('/') : undefined;
+  } catch (err) {
+    console.error('[BMaestro] Failed to get folder path:', err);
+    return undefined;
+  }
+}
+
 // Listen for bookmark changes and queue operations
 chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
   if (recentlySyncedIds.has(id)) {
@@ -356,8 +496,12 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
 
   console.log('[BMaestro] Bookmark created:', id);
 
-  // Get folder type for cross-browser compatibility
+  // Get folder type and path for cross-browser compatibility
   const folderType = bookmark.parentId ? await getFolderTypeById(bookmark.parentId) : 'unknown';
+  const folderPath = bookmark.parentId ? await getFolderPath(bookmark.parentId) : undefined;
+
+  // Determine if this is a folder
+  const isFolder = !bookmark.url;
 
   client.queueOperation({
     id: crypto.randomUUID(),
@@ -367,9 +511,11 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
       nativeId: id,
       parentNativeId: bookmark.parentId,
       folderType,
+      folderPath,
       title: bookmark.title,
       url: bookmark.url,
       index: bookmark.index,
+      isFolder,
     },
     timestamp: new Date().toISOString(),
   });
@@ -632,40 +778,106 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Full sync - export all bookmarks
+// Full sync - export all bookmarks AND folders
 async function performFullSync(): Promise<{ success: boolean; count: number; error?: string }> {
   console.log('[BMaestro] Starting full sync...');
 
   try {
     const tree = await chrome.bookmarks.getTree();
-    let count = 0;
+    let bookmarkCount = 0;
+    let folderCount = 0;
 
-    // Build a map of folder ID -> folder type for quick lookup
+    // Build maps for folder info
     const folderTypeMap = new Map<string, FolderType>();
+    const folderPathMap = new Map<string, string>(); // folder ID -> full path
 
-    // Identify root folders
+    // Identify root folders and build paths
     const root = tree[0];
     if (root.children) {
       for (const folder of root.children) {
         const title = folder.title.toLowerCase();
-        if (title.includes('bookmarks bar')) {
+        if (title.includes('bookmarks bar') || title.includes('bookmark bar')) {
           folderTypeMap.set(folder.id, 'bookmarks-bar');
+          folderPathMap.set(folder.id, folder.title);
         } else if (title.includes('other bookmark')) {
           folderTypeMap.set(folder.id, 'other-bookmarks');
+          folderPathMap.set(folder.id, folder.title);
         } else if (title.includes('mobile bookmark')) {
           folderTypeMap.set(folder.id, 'mobile-bookmarks');
+          folderPathMap.set(folder.id, folder.title);
         }
       }
     }
 
-    // Recursively process all bookmarks
-    function processNode(node: chrome.bookmarks.BookmarkTreeNode): void {
-      // Skip root nodes
-      if (node.url) {
-        // Get folder type for the parent
-        const folderType = node.parentId ? (folderTypeMap.get(node.parentId) || 'unknown') : 'unknown';
+    // First pass: collect all folders with their paths (breadth-first for proper ordering)
+    const foldersToSync: Array<{
+      node: chrome.bookmarks.BookmarkTreeNode;
+      path: string;
+      folderType: FolderType;
+    }> = [];
 
-        // It's a bookmark
+    function collectFolders(node: chrome.bookmarks.BookmarkTreeNode, parentPath: string, parentFolderType: FolderType): void {
+      if (!node.children) return;
+
+      for (const child of node.children) {
+        if (!child.url) {
+          // It's a folder
+          const childPath = parentPath ? `${parentPath}/${child.title}` : child.title;
+          folderPathMap.set(child.id, childPath);
+
+          // Inherit folder type from parent
+          const childFolderType = folderTypeMap.get(child.id) || parentFolderType;
+          folderTypeMap.set(child.id, childFolderType);
+
+          // Only sync user folders (not root folders)
+          if (!folderTypeMap.has(child.id) || parentPath) {
+            foldersToSync.push({
+              node: child,
+              path: parentPath, // Parent path for creating this folder
+              folderType: childFolderType,
+            });
+          }
+
+          // Recurse into subfolders
+          collectFolders(child, childPath, childFolderType);
+        }
+      }
+    }
+
+    // Start from root folders
+    if (root.children) {
+      for (const folder of root.children) {
+        const folderType = folderTypeMap.get(folder.id) || 'unknown';
+        collectFolders(folder, folder.title, folderType);
+      }
+    }
+
+    // Queue folder operations (parent folders first due to breadth-first collection)
+    for (const folder of foldersToSync) {
+      client.queueOperation({
+        id: crypto.randomUUID(),
+        opType: 'ADD',
+        bookmarkId: folder.node.id,
+        payload: {
+          nativeId: folder.node.id,
+          parentNativeId: folder.node.parentId,
+          folderType: folder.folderType,
+          folderPath: folder.path,
+          title: folder.node.title,
+          isFolder: true,
+        },
+        timestamp: new Date().toISOString(),
+      });
+      folderCount++;
+    }
+
+    // Second pass: collect all bookmarks with their folder paths
+    function processBookmarks(node: chrome.bookmarks.BookmarkTreeNode): void {
+      if (node.url) {
+        // Get folder info for the parent
+        const folderType = node.parentId ? (folderTypeMap.get(node.parentId) || 'unknown') : 'unknown';
+        const folderPath = node.parentId ? folderPathMap.get(node.parentId) : undefined;
+
         client.queueOperation({
           id: crypto.randomUUID(),
           opType: 'ADD',
@@ -674,35 +886,36 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
             nativeId: node.id,
             parentNativeId: node.parentId,
             folderType,
+            folderPath,
             title: node.title,
             url: node.url,
             index: node.index,
           },
           timestamp: new Date().toISOString(),
         });
-        count++;
+        bookmarkCount++;
       }
 
       // Process children
       if (node.children) {
         for (const child of node.children) {
-          processNode(child);
+          processBookmarks(child);
         }
       }
     }
 
-    for (const root of tree) {
-      processNode(root);
+    for (const rootNode of tree) {
+      processBookmarks(rootNode);
     }
 
-    console.log(`[BMaestro] Queued ${count} bookmarks for sync`);
+    console.log(`[BMaestro] Queued ${folderCount} folders and ${bookmarkCount} bookmarks for sync`);
 
     // Now sync
     const result = await client.sync();
 
     return {
       success: result.success,
-      count,
+      count: bookmarkCount + folderCount,
       error: result.error,
     };
   } catch (err) {
