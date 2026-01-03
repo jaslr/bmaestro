@@ -182,6 +182,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
           updateAvailable: true,
           latestVersion: updateInfo.latestVersion,
           updateDownloadUrl: updateInfo.downloadUrl,
+          badgeReason: `Update v${updateInfo.latestVersion} available`,
+          badgeType: 'update',
         });
 
         // Set badge to indicate update - Chrome handles actual update delivery
@@ -189,11 +191,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         chrome.action.setBadgeBackgroundColor({ color: '#03FFE3' });
       } else {
         // No update available - clear badge and stale storage
-        await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload']);
+        await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload', 'badgeReason', 'badgeType']);
         chrome.action.setBadgeText({ text: '' });
       }
     } catch (err) {
       console.error('[BMaestro] Update check failed:', err);
+      // Store error for popup
+      await chrome.storage.local.set({
+        badgeReason: 'Update check failed',
+        badgeType: 'error',
+      });
     }
   }
 });
@@ -705,6 +712,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             updateAvailable: true,
             latestVersion: updateInfo.latestVersion,
             updateDownloadUrl: updateInfo.downloadUrl,
+            badgeReason: `Update v${updateInfo.latestVersion} available`,
+            badgeType: 'update',
           });
 
           // Set badge - Chrome handles actual update delivery
@@ -719,8 +728,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             latestVersion: updateInfo.latestVersion,
           });
         } else {
-          // Clear update flag
+          // Clear update flag and badge
           await chrome.storage.local.set({ updateAvailable: false });
+          await chrome.storage.local.remove(['badgeReason', 'badgeType']);
           chrome.action.setBadgeText({ text: '' });
 
           sendResponse({
@@ -733,6 +743,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       } catch (err: any) {
         console.error('[BMaestro] UPDATE_AND_SYNC failed:', err);
+        // Store error for popup
+        await chrome.storage.local.set({
+          badgeReason: `Sync error: ${err.message || String(err)}`,
+          badgeType: 'error',
+        });
+        chrome.action.setBadgeText({ text: '!' });
+        chrome.action.setBadgeBackgroundColor({ color: '#D4A000' }); // Amber for errors
         sendResponse({ success: false, error: err.message || String(err) });
       }
     })();

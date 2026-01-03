@@ -226,6 +226,51 @@ h1 {
   opacity: 0.5;
 }
 
+/* Badge status in menu */
+.badge-status-section.hidden {
+  display: none;
+}
+
+.badge-status-item {
+  cursor: default;
+  padding: 8px 12px;
+}
+
+.badge-status-item:hover {
+  background: none;
+  color: inherit;
+}
+
+.badge-status-text {
+  font-size: 10px;
+  color: var(--cyan);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge-status-text::before {
+  content: '!';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  background: var(--cyan);
+  color: var(--bg-base);
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 2px;
+}
+
+.badge-status-text.error {
+  color: var(--amber);
+}
+
+.badge-status-text.error::before {
+  background: var(--amber);
+}
+
 /* Warning menu item */
 .warning-item {
   color: var(--amber);

@@ -732,11 +732,37 @@ async function init(): Promise<void> {
     const settingsBtn = document.getElementById('settingsBtn') as HTMLButtonElement | null;
     const settingsMenu = document.getElementById('settingsMenu');
     const logoutBtn = document.getElementById('logoutBtn') as HTMLButtonElement | null;
+    const badgeStatusSection = document.getElementById('badgeStatusSection');
+    const badgeStatusText = document.getElementById('badgeStatusText');
+
+    // Function to update badge status display
+    async function updateBadgeStatus(): Promise<void> {
+      if (!badgeStatusSection || !badgeStatusText) return;
+
+      try {
+        const { badgeReason, badgeType } = await chrome.storage.local.get(['badgeReason', 'badgeType']);
+
+        if (badgeReason) {
+          badgeStatusText.textContent = badgeReason;
+          badgeStatusText.className = 'badge-status-text' + (badgeType === 'error' ? ' error' : '');
+          badgeStatusSection.classList.remove('hidden');
+        } else {
+          badgeStatusSection.classList.add('hidden');
+        }
+      } catch (err) {
+        console.error('[Popup] Failed to get badge status:', err);
+        badgeStatusSection.classList.add('hidden');
+      }
+    }
 
     if (settingsBtn && settingsMenu) {
-      settingsBtn.addEventListener('click', (e) => {
+      settingsBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         settingsMenu.classList.toggle('hidden');
+        // Update badge status when menu is opened
+        if (!settingsMenu.classList.contains('hidden')) {
+          await updateBadgeStatus();
+        }
       });
 
       // Close menu when clicking outside
@@ -748,6 +774,9 @@ async function init(): Promise<void> {
         e.stopPropagation();
       });
     }
+
+    // Check badge status on popup open
+    updateBadgeStatus();
 
     if (logoutBtn) {
       logoutBtn.addEventListener('click', async () => {
