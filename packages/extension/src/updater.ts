@@ -1,5 +1,5 @@
 // packages/extension/src/updater.ts
-// Extension update checker and downloader
+// Extension update checker - Chrome handles actual update delivery
 
 import { CLOUD_CONFIG, EXTENSION_VERSION } from './cloud/config.js';
 
@@ -46,41 +46,4 @@ function compareVersions(a: string, b: string): number {
     if (numA < numB) return -1;
   }
   return 0;
-}
-
-// Download and run the installer
-export async function downloadUpdate(): Promise<void> {
-  // Download a self-contained installer that extracts to the right place
-  const downloadId = await chrome.downloads.download({
-    url: `${CLOUD_CONFIG.downloadUrl}/install.cmd`,
-    filename: 'bmaestro-update.cmd',
-    saveAs: false,
-  });
-
-  // Open the downloads folder after a short delay
-  setTimeout(() => {
-    chrome.downloads.showDefaultFolder();
-  }, 1000);
-}
-
-// These are no longer used but kept for backwards compatibility
-export async function setupAutoUpdate(): Promise<boolean> {
-  // File System Access API not available in extension popups
-  // Just download the update instead
-  await downloadUpdate();
-  return true;
-}
-
-export async function isAutoUpdateConfigured(): Promise<boolean> {
-  // Always return false - we use manual download now
-  return false;
-}
-
-export async function downloadAndApplyUpdate(
-  onProgress?: (status: string) => void
-): Promise<boolean> {
-  onProgress?.('Downloading update...');
-  await downloadUpdate();
-  onProgress?.('Download started - check your downloads folder');
-  return true;
 }

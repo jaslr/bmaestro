@@ -561,8 +561,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             updateDownloadUrl: updateInfo.downloadUrl,
           });
 
-          // Download update
-          await autoDownloadUpdate();
+          // Set badge - Chrome handles actual update delivery
+          chrome.action.setBadgeText({ text: '!' });
+          chrome.action.setBadgeBackgroundColor({ color: '#03FFE3' });
 
           sendResponse({
             success: true,
