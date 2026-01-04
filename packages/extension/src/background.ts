@@ -214,7 +214,31 @@ client.onSync((operations) => {
 
 // Apply operations from other browsers
 async function applyOperations(operations: SyncOperation[]): Promise<void> {
-  for (const op of operations) {
+  // CRITICAL: Sort operations so folders are created before bookmarks
+  // This ensures parent folders exist when bookmarks are added
+  const sortedOps = [...operations].sort((a, b) => {
+    const aPayload = a.payload as any;
+    const bPayload = b.payload as any;
+    const aIsFolder = aPayload?.isFolder || !aPayload?.url;
+    const bIsFolder = bPayload?.isFolder || !bPayload?.url;
+
+    // Folders come before bookmarks
+    if (aIsFolder && !bIsFolder) return -1;
+    if (!aIsFolder && bIsFolder) return 1;
+
+    // Within folders, sort by path depth (shallower folders first)
+    if (aIsFolder && bIsFolder) {
+      const aDepth = (aPayload?.folderPath || '').split('/').length;
+      const bDepth = (bPayload?.folderPath || '').split('/').length;
+      return aDepth - bDepth;
+    }
+
+    return 0;
+  });
+
+  console.log(`[BMaestro] Applying ${sortedOps.length} operations (${sortedOps.filter(op => (op.payload as any)?.isFolder).length} folders first)`);
+
+  for (const op of sortedOps) {
     try {
       // Extract nativeId from operation payload to prevent echo
       const payload = op.payload as any;
@@ -280,11 +304,14 @@ async function applyAdd(op: SyncOperation): Promise<void> {
 
     // Create the folder
     try {
-      await chrome.bookmarks.create({
+      const created = await chrome.bookmarks.create({
         parentId,
         title: payload.title,
       });
-      console.log('[BMaestro] Created folder:', payload.title);
+      // Add to recently synced to prevent echo back to cloud
+      recentlySyncedIds.add(created.id);
+      setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
+      console.log('[BMaestro] Created folder:', payload.title, 'id:', created.id);
     } catch (err) {
       console.error('[BMaestro] Failed to create folder:', err);
     }
@@ -306,32 +333,48 @@ async function applyAdd(op: SyncOperation): Promise<void> {
   console.log(`[BMaestro] Creating bookmark in parent ${parentId} (path: ${payload.folderPath}, type: ${payload.folderType})`);
 
   try {
-    await chrome.bookmarks.create({
+    const created = await chrome.bookmarks.create({
       parentId,
       title: payload.title,
       url: payload.url,
     });
+    // Add to recently synced to prevent echo back to cloud
+    recentlySyncedIds.add(created.id);
+    setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
+    console.log('[BMaestro] Created bookmark:', payload.title, 'in folder:', parentId);
   } catch (err) {
     console.error('[BMaestro] Failed to create bookmark:', err);
     // Try creating in bookmarks bar as last resort
     const fallbackId = await getLocalFolderIdByType('bookmarks-bar');
     if (fallbackId && fallbackId !== parentId) {
       console.log('[BMaestro] Retrying in bookmarks bar...');
-      await chrome.bookmarks.create({
-        parentId: fallbackId,
-        title: payload.title,
-        url: payload.url,
-      });
+      try {
+        const created = await chrome.bookmarks.create({
+          parentId: fallbackId,
+          title: payload.title,
+          url: payload.url,
+        });
+        recentlySyncedIds.add(created.id);
+        setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
+      } catch (fallbackErr) {
+        console.error('[BMaestro] Failed to create bookmark in fallback location:', fallbackErr);
+      }
     }
   }
 }
 
 // Resolve parent folder by path (e.g., "Bookmarks Bar/Work/Projects")
 async function resolveParentByPath(folderPath?: string, folderType?: FolderType): Promise<string | null> {
-  if (!folderPath) return null;
+  if (!folderPath) {
+    console.log('[BMaestro] resolveParentByPath: no folderPath provided');
+    return null;
+  }
 
   const parts = folderPath.split('/').filter(p => p.trim());
-  if (parts.length === 0) return null;
+  if (parts.length === 0) {
+    console.log('[BMaestro] resolveParentByPath: empty path after split');
+    return null;
+  }
 
   const tree = await chrome.bookmarks.getTree();
   const root = tree[0];
@@ -363,6 +406,7 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
 
   // Fallback: use folderType if root not found by name
   if (!currentFolder && folderType) {
+    console.log(`[BMaestro] resolveParentByPath: root "${parts[0]}" not found by name, using folderType fallback`);
     const localId = await getLocalFolderIdByType(folderType);
     if (localId) {
       const [folder] = await chrome.bookmarks.get(localId);
@@ -374,7 +418,10 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
     }
   }
 
-  if (!currentFolder) return null;
+  if (!currentFolder) {
+    console.log(`[BMaestro] resolveParentByPath: could not resolve root for path "${folderPath}"`);
+    return null;
+  }
 
   // Navigate/create remaining path parts
   for (let i = 1; i < parts.length; i++) {
@@ -391,17 +438,26 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
 
     // Create folder if it doesn't exist
     if (!childFolder) {
-      console.log(`[BMaestro] Creating folder "${partName}" in ${currentFolder.title}`);
-      const created = await chrome.bookmarks.create({
-        parentId: currentFolder.id,
-        title: partName,
-      });
-      childFolder = created;
+      console.log(`[BMaestro] Creating intermediate folder "${partName}" in ${currentFolder.title}`);
+      try {
+        const created = await chrome.bookmarks.create({
+          parentId: currentFolder.id,
+          title: partName,
+        });
+        // Add to recently synced to prevent echo back to cloud
+        recentlySyncedIds.add(created.id);
+        setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
+        childFolder = created;
+      } catch (err) {
+        console.error(`[BMaestro] Failed to create intermediate folder "${partName}":`, err);
+        return null;
+      }
     }
 
     currentFolder = childFolder;
   }
 
+  console.log(`[BMaestro] resolveParentByPath: resolved "${folderPath}" to folder ID ${currentFolder.id}`);
   return currentFolder.id;
 }
 

@@ -27,7 +27,7 @@ export async function processSyncRequest(req: SyncRequest): Promise<SyncResponse
   // 1. Get operations from other devices since lastSyncVersion
   const pendingOps = await pb.collection('sync_operations').getFullList({
     filter: `user_id = "${userId}" && device_id != "${deviceId}" && version > ${lastSyncVersion}`,
-    sort: 'version',
+    sort: 'version,timestamp',  // Secondary sort by timestamp ensures folder operations come before bookmark operations
   });
 
   // 2. Process incoming operations with last-edit-wins conflict resolution
