@@ -849,6 +849,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     return true;
   }
+
+  if (message.type === 'RESET_FROM_CANONICAL') {
+    console.log('[BMaestro] Starting reset from canonical...');
+    resetFromCanonical()
+      .then((result) => {
+        console.log('[BMaestro] Reset from canonical success:', result);
+        sendResponse(result);
+      })
+      .catch(err => {
+        console.error('[BMaestro] Reset from canonical failed:', err, err.stack);
+        sendResponse({ success: false, error: err.message || String(err) });
+      });
+    return true;
+  }
 });
 
 // Full sync - export all bookmarks AND folders
@@ -993,6 +1007,86 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
     };
   } catch (err) {
     console.error('[BMaestro] Full sync error:', err);
+    return {
+      success: false,
+      count: 0,
+      error: String(err),
+    };
+  }
+}
+
+// Reset from canonical - clear all bookmarks and re-sync from Chrome
+async function resetFromCanonical(): Promise<{ success: boolean; count: number; error?: string }> {
+  console.log('[BMaestro] Starting reset from canonical...');
+
+  try {
+    // Step 1: Delete all bookmarks in the Bookmarks Bar and Other Bookmarks
+    const tree = await chrome.bookmarks.getTree();
+    const root = tree[0];
+
+    if (!root.children) {
+      return { success: false, count: 0, error: 'Could not access bookmark tree' };
+    }
+
+    let deletedCount = 0;
+
+    // Find and clear the main bookmark folders
+    for (const folder of root.children) {
+      const title = folder.title.toLowerCase();
+      // Only clear Bookmarks Bar and Other Bookmarks
+      if (title.includes('bookmarks bar') || title.includes('bookmark bar') ||
+          title.includes('other bookmark')) {
+
+        console.log(`[BMaestro] Clearing folder: ${folder.title}`);
+
+        // Get children and delete them (can't delete the root folders themselves)
+        const subtree = await chrome.bookmarks.getSubTree(folder.id);
+        const children = subtree[0].children || [];
+
+        for (const child of children) {
+          try {
+            // Add to recently synced to prevent echo
+            recentlySyncedIds.add(child.id);
+            setTimeout(() => recentlySyncedIds.delete(child.id), DEDUPE_TIMEOUT_MS);
+
+            // Use removeTree for folders, remove for bookmarks
+            if (child.url) {
+              await chrome.bookmarks.remove(child.id);
+            } else {
+              await chrome.bookmarks.removeTree(child.id);
+            }
+            deletedCount++;
+          } catch (err) {
+            console.error('[BMaestro] Failed to delete:', child.title, err);
+          }
+        }
+      }
+    }
+
+    console.log(`[BMaestro] Deleted ${deletedCount} items, now syncing from canonical...`);
+
+    // Step 2: Sync to pull bookmarks from canonical browser
+    const syncResult = await client.sync();
+
+    if (!syncResult.success) {
+      return {
+        success: false,
+        count: deletedCount,
+        error: syncResult.error || 'Sync failed after clearing bookmarks',
+      };
+    }
+
+    // Count how many items were synced
+    const syncedCount = syncResult.operations?.length || 0;
+
+    console.log(`[BMaestro] Reset complete: deleted ${deletedCount}, synced ${syncedCount} items`);
+
+    return {
+      success: true,
+      count: syncedCount,
+    };
+  } catch (err) {
+    console.error('[BMaestro] Reset from canonical error:', err);
     return {
       success: false,
       count: 0,

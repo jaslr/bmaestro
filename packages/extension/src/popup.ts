@@ -591,6 +591,70 @@ async function init(): Promise<void> {
       });
     }
 
+    // Reset from Chrome button
+    const resetFromCanonicalBtn = document.getElementById('resetFromCanonical') as HTMLButtonElement | null;
+    if (resetFromCanonicalBtn) {
+      resetFromCanonicalBtn.addEventListener('click', async () => {
+        console.log('[Popup] Reset from Chrome clicked');
+
+        // Check if this browser is already canonical
+        if (stored.isCanonical === true) {
+          showNotification('This is the Source of Truth - cannot reset from itself', 'error');
+          return;
+        }
+
+        if (!confirm('This will DELETE all bookmarks in this browser\'s Bookmarks Bar and re-sync from Chrome.\n\nThis cannot be undone. Continue?')) {
+          return;
+        }
+
+        resetFromCanonicalBtn.disabled = true;
+        resetFromCanonicalBtn.textContent = 'Resetting...';
+        if (statusEl) {
+          statusEl.textContent = 'Resetting...';
+          statusEl.className = 'value syncing';
+        }
+
+        try {
+          console.log('[Popup] Sending RESET_FROM_CANONICAL message...');
+          const response = await chrome.runtime.sendMessage({ type: 'RESET_FROM_CANONICAL' });
+          console.log('[Popup] Reset response:', response);
+
+          if (response?.success) {
+            showNotification(`Reset complete! Synced ${response.count} items`, 'success');
+            if (statusEl) {
+              statusEl.textContent = 'Sync complete';
+              statusEl.className = 'value connected';
+            }
+          } else {
+            const errorMsg = response?.error || 'Unknown error';
+            console.error('[Popup] Reset failed:', errorMsg);
+            showNotification(`Reset failed: ${errorMsg}`, 'error');
+            if (statusEl) {
+              statusEl.textContent = 'Reset failed';
+              statusEl.className = 'value disconnected';
+            }
+          }
+
+          // Refresh stored data
+          const newStored = await chrome.storage.local.get(['lastSyncTime', 'pendingOps']);
+          stored.lastSyncTime = newStored.lastSyncTime;
+          stored.pendingOps = newStored.pendingOps;
+          updateStatusDisplay();
+          loadActivity();
+        } catch (err: any) {
+          console.error('[Popup] Reset from canonical error:', err);
+          showNotification(`Reset failed: ${err.message || err}`, 'error');
+          if (statusEl) {
+            statusEl.textContent = 'Reset failed';
+            statusEl.className = 'value disconnected';
+          }
+        }
+
+        resetFromCanonicalBtn.disabled = false;
+        resetFromCanonicalBtn.textContent = 'Reset from Chrome';
+      });
+    }
+
     // Interval change
     if (intervalSelect) {
       intervalSelect.addEventListener('change', async () => {
