@@ -1065,8 +1065,13 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
 
     console.log(`[BMaestro] Deleted ${deletedCount} items, now syncing from canonical...`);
 
-    // Step 2: Sync to pull bookmarks from canonical browser
+    // Step 2: Reset lastSyncVersion to 0 to pull ALL operations from the beginning
+    await chrome.storage.local.set({ lastSyncVersion: 0 });
+    console.log('[BMaestro] Reset lastSyncVersion to 0 to pull all operations');
+
+    // Step 3: Sync to pull ALL bookmarks from canonical browser
     const syncResult = await client.sync();
+    console.log('[BMaestro] Sync result:', JSON.stringify(syncResult));
 
     if (!syncResult.success) {
       return {

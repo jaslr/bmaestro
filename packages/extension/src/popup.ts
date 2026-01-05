@@ -639,16 +639,23 @@ async function init(): Promise<void> {
         try {
           console.log('[Popup] Sending RESET_FROM_CANONICAL message...');
           const response = await chrome.runtime.sendMessage({ type: 'RESET_FROM_CANONICAL' });
-          console.log('[Popup] Reset response:', response);
+          console.log('[Popup] Reset response:', JSON.stringify(response));
 
-          if (response?.success) {
-            showNotification(`Reset complete! Synced ${response.count} items`, 'success');
+          if (!response) {
+            console.error('[Popup] No response from background script');
+            showNotification('Reset failed: No response from background', 'error');
+            if (statusEl) {
+              statusEl.textContent = 'Reset failed';
+              statusEl.className = 'value disconnected';
+            }
+          } else if (response.success) {
+            showNotification(`Reset complete! Synced ${response.count || 0} items`, 'success');
             if (statusEl) {
               statusEl.textContent = 'Sync complete';
               statusEl.className = 'value connected';
             }
           } else {
-            const errorMsg = response?.error || 'Unknown error';
+            const errorMsg = response.error || `Unknown error (response: ${JSON.stringify(response)})`;
             console.error('[Popup] Reset failed:', errorMsg);
             showNotification(`Reset failed: ${errorMsg}`, 'error');
             if (statusEl) {
