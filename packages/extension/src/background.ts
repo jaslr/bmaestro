@@ -852,15 +852,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'RESET_FROM_CANONICAL') {
     console.log('[BMaestro] Starting reset from canonical...');
-    resetFromCanonical()
-      .then((result) => {
-        console.log('[BMaestro] Reset from canonical success:', result);
+    (async () => {
+      try {
+        const result = await resetFromCanonical();
+        console.log('[BMaestro] Reset from canonical result:', JSON.stringify(result));
         sendResponse(result);
-      })
-      .catch(err => {
-        console.error('[BMaestro] Reset from canonical failed:', err, err.stack);
-        sendResponse({ success: false, error: err.message || String(err) });
-      });
+      } catch (err: any) {
+        console.error('[BMaestro] Reset from canonical failed:', err, err?.stack);
+        sendResponse({ success: false, error: err?.message || String(err) });
+      }
+    })();
     return true;
   }
 });
