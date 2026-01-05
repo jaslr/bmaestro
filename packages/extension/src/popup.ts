@@ -591,19 +591,41 @@ async function init(): Promise<void> {
       });
     }
 
-    // Reset from Chrome button
+    // Reset from Source of Truth button
     const resetFromCanonicalBtn = document.getElementById('resetFromCanonical') as HTMLButtonElement | null;
+
+    // Show/hide reset button based on canonical status (only show if NOT canonical)
+    function updateResetButtonVisibility(): void {
+      if (resetFromCanonicalBtn) {
+        if (stored.isCanonical === true) {
+          resetFromCanonicalBtn.classList.add('hidden');
+        } else {
+          resetFromCanonicalBtn.classList.remove('hidden');
+        }
+      }
+    }
+    updateResetButtonVisibility();
+
+    // Update reset button visibility when canonical toggle changes
+    if (canonicalToggle) {
+      canonicalToggle.addEventListener('change', () => {
+        // Update stored value for visibility check
+        stored.isCanonical = canonicalToggle.checked;
+        updateResetButtonVisibility();
+      });
+    }
+
     if (resetFromCanonicalBtn) {
       resetFromCanonicalBtn.addEventListener('click', async () => {
-        console.log('[Popup] Reset from Chrome clicked');
+        console.log('[Popup] Reset from Source of Truth clicked');
 
-        // Check if this browser is already canonical
+        // Double-check this browser is not canonical (shouldn't be visible, but just in case)
         if (stored.isCanonical === true) {
           showNotification('This is the Source of Truth - cannot reset from itself', 'error');
           return;
         }
 
-        if (!confirm('This will DELETE all bookmarks in this browser\'s Bookmarks Bar and re-sync from Chrome.\n\nThis cannot be undone. Continue?')) {
+        if (!confirm('This will DELETE all bookmarks in this browser\'s Bookmarks Bar and re-sync from the Source of Truth.\n\nThis cannot be undone. Continue?')) {
           return;
         }
 
@@ -651,7 +673,7 @@ async function init(): Promise<void> {
         }
 
         resetFromCanonicalBtn.disabled = false;
-        resetFromCanonicalBtn.textContent = 'Reset from Chrome';
+        resetFromCanonicalBtn.textContent = 'Reset from Source of Truth';
       });
     }
 

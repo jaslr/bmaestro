@@ -131,6 +131,10 @@ h1 {
   color: var(--amber);
 }
 
+.menu-item.hidden {
+  display: none;
+}
+
 .menu-item.toggle-item {
   cursor: default;
 }

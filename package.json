@@ -1,6 +1,6 @@
 {
   "name": "bmaestro",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "private": true,
   "description": "Cross-browser bookmark sync with cloud backend",
   "type": "module",
