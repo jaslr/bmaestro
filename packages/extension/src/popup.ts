@@ -686,6 +686,37 @@ async function init(): Promise<void> {
       });
     }
 
+    // Clear Server Data button
+    const clearServerDataBtn = document.getElementById('clearServerData') as HTMLButtonElement | null;
+    if (clearServerDataBtn) {
+      clearServerDataBtn.addEventListener('click', async () => {
+        if (!confirm('This will delete ALL sync operations from the server.\n\nAfter this, you should:\n1. Click "Full Sync (Export All)" in Chrome (Source of Truth)\n2. Click "Reset from Source of Truth" in other browsers\n\nContinue?')) {
+          return;
+        }
+
+        try {
+          clearServerDataBtn.disabled = true;
+          clearServerDataBtn.textContent = 'Clearing...';
+
+          const response = await chrome.runtime.sendMessage({ type: 'CLEAR_SERVER_DATA' });
+
+          if (!response) {
+            showNotification('Clear failed: No response from background', 'error');
+          } else if (response.success) {
+            showNotification(`Server cleared! Deleted ${response.deleted} operations. Now do Full Sync from Chrome.`, 'success');
+          } else {
+            showNotification(`Clear failed: ${response.error || 'Unknown error'}`, 'error');
+          }
+        } catch (err: any) {
+          console.error('[Popup] Clear server data error:', err);
+          showNotification(`Clear failed: ${err.message || err}`, 'error');
+        }
+
+        clearServerDataBtn.disabled = false;
+        clearServerDataBtn.textContent = 'Clear Server Data';
+      });
+    }
+
     // Interval change
     if (intervalSelect) {
       intervalSelect.addEventListener('change', async () => {

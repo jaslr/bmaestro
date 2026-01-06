@@ -227,6 +227,43 @@ export async function handleHttpRequest(
     return true;
   }
 
+  // POST /clear-operations - Clear all sync operations for user (for fresh start)
+  if (path === '/clear-operations' && method === 'POST') {
+    try {
+      const { pb } = await import('../pocketbase.js');
+
+      // Get all operations for this user
+      const ops = await pb.collection('sync_operations').getFullList({
+        filter: `user_id = "${userId}"`,
+      });
+
+      // Delete them all
+      let deleted = 0;
+      for (const op of ops) {
+        await pb.collection('sync_operations').delete(op.id);
+        deleted++;
+      }
+
+      console.log(`[Clear] Deleted ${deleted} operations for user ${userId}`);
+
+      // Log the action
+      await logActivity({
+        user_id: userId,
+        device_id: 'system',
+        browser_type: 'chrome',
+        action: 'OPERATIONS_CLEARED',
+        details: { deleted },
+        timestamp: new Date().toISOString(),
+      });
+
+      json(res, { success: true, deleted });
+    } catch (err) {
+      console.error('[Clear] Error clearing operations:', err);
+      json(res, { error: 'Failed to clear operations', details: String(err) }, 500);
+    }
+    return true;
+  }
+
   // GET /activity - Get activity log
   if (path === '/activity' && method === 'GET') {
     const limit = parseInt(url.searchParams.get('limit') || '50');

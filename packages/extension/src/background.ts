@@ -902,6 +902,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+
+  if (message.type === 'CLEAR_SERVER_DATA') {
+    console.log('[BMaestro] Clearing server data...');
+    (async () => {
+      try {
+        const result = await clearServerData();
+        console.log('[BMaestro] Clear server data result:', JSON.stringify(result));
+        sendResponse(result);
+      } catch (err: any) {
+        console.error('[BMaestro] Clear server data failed:', err, err?.stack);
+        sendResponse({ success: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
+  }
 });
 
 // Full sync - export all bookmarks AND folders
@@ -1184,6 +1199,43 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
     };
   } finally {
     resetInProgress = false;
+  }
+}
+
+// Clear all server data (operations) for a fresh start
+async function clearServerData(): Promise<{ success: boolean; deleted: number; error?: string }> {
+  console.log('[BMaestro] Clearing server data...');
+
+  try {
+    const config = await getConfig();
+    if (!config.syncSecret || !config.userId) {
+      return { success: false, deleted: 0, error: 'Not configured' };
+    }
+
+    const response = await fetch(CLOUD_CONFIG.clearUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${config.syncSecret}`,
+        'X-User-Id': config.userId,
+      },
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return { success: false, deleted: 0, error: `Server error: ${response.status} ${text}` };
+    }
+
+    const result = await response.json();
+    console.log('[BMaestro] Server data cleared:', result);
+
+    // Also reset local lastSyncVersion to 0
+    await chrome.storage.local.set({ lastSyncVersion: 0 });
+
+    return { success: true, deleted: result.deleted || 0 };
+  } catch (err) {
+    console.error('[BMaestro] Failed to clear server data:', err);
+    return { success: false, deleted: 0, error: String(err) };
   }
 }
 

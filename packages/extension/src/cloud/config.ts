@@ -3,13 +3,14 @@ export const CLOUD_CONFIG = {
   activityUrl: 'https://bmaestro-sync.fly.dev/activity',
   versionUrl: 'https://bmaestro-sync.fly.dev/version',
   downloadUrl: 'https://bmaestro-sync.fly.dev/download',
+  clearUrl: 'https://bmaestro-sync.fly.dev/clear-operations',
   defaultPollIntervalMinutes: 5,
   minPollIntervalMinutes: 1,
   maxPollIntervalMinutes: 60,
 };
 
 // Current extension version - must match manifest.json
-export const EXTENSION_VERSION = '1.10.19';
+export const EXTENSION_VERSION = '1.10.20';
 
 export interface StoredConfig {
   syncSecret: string;
