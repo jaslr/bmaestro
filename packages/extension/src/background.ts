@@ -338,6 +338,7 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
       const created = await chrome.bookmarks.create({
         parentId,
         title: payload.title,
+        index: payload.index,
       });
       // Add to recently synced to prevent echo back to cloud
       recentlySyncedIds.add(created.id);
@@ -373,6 +374,7 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
       parentId,
       title: payload.title,
       url: payload.url,
+      index: payload.index,
     });
     // Add to recently synced to prevent echo back to cloud
     recentlySyncedIds.add(created.id);
@@ -388,6 +390,7 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
           parentId: fallbackId,
           title: payload.title,
           url: payload.url,
+          index: payload.index,
         });
         recentlySyncedIds.add(created.id);
         setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
@@ -1006,6 +1009,7 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
           folderType: folder.folderType,
           folderPath: folder.path,
           title: folder.node.title,
+          index: folder.node.index,
           isFolder: true,
         },
         timestamp: new Date().toISOString(),
