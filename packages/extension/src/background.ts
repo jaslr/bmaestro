@@ -342,12 +342,12 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
       return;
     }
 
-    // Create the folder
+    // Create the folder (don't use index - it causes "Index out of bounds" errors
+    // when creating items out of order or when destination has fewer items)
     try {
       const created = await chrome.bookmarks.create({
         parentId,
         title: payload.title,
-        index: payload.index,
       });
       // Add to recently synced to prevent echo back to cloud
       recentlySyncedIds.add(created.id);
@@ -386,12 +386,13 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
     console.log(`[BMaestro] applyAdd: WARNING - used fallback parentId=${parentId} for "${payload.title}" (intended path: "${payload.folderPath}")`);
   }
 
+  // Don't use index - it causes "Index out of bounds" errors when creating items
+  // out of order or when destination folder has fewer items than source
   try {
     const created = await chrome.bookmarks.create({
       parentId,
       title: payload.title,
       url: payload.url,
-      index: payload.index,
     });
     // Add to recently synced to prevent echo back to cloud
     recentlySyncedIds.add(created.id);
@@ -399,26 +400,7 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
     if (stats) stats.bookmarksCreated++;
   } catch (err) {
     console.error('[BMaestro] Failed to create bookmark:', payload.title, err);
-    // Try creating in bookmarks bar as last resort
-    const fallbackId = await getLocalFolderIdByType('bookmarks-bar');
-    if (fallbackId && fallbackId !== parentId) {
-      try {
-        const created = await chrome.bookmarks.create({
-          parentId: fallbackId,
-          title: payload.title,
-          url: payload.url,
-          index: payload.index,
-        });
-        recentlySyncedIds.add(created.id);
-        setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
-        if (stats) stats.bookmarksCreated++;
-      } catch (fallbackErr) {
-        console.error('[BMaestro] Failed to create bookmark in fallback:', payload.title, fallbackErr);
-        if (stats) stats.errors++;
-      }
-    } else {
-      if (stats) stats.errors++;
-    }
+    if (stats) stats.errors++;
   }
 }
 
