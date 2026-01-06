@@ -233,6 +233,30 @@ interface ApplyStats {
   errors: number;
 }
 
+// Sync log for debugging - stored in extension storage
+interface SyncLogEntry {
+  time: string;
+  action: string;
+  title: string;
+  path?: string;
+  result: 'success' | 'skipped' | 'fallback' | 'error';
+  details?: string;
+}
+
+const MAX_LOG_ENTRIES = 200;
+
+async function addSyncLog(entry: Omit<SyncLogEntry, 'time'>): Promise<void> {
+  try {
+    const { syncLog = [] } = await chrome.storage.local.get('syncLog');
+    syncLog.push({ ...entry, time: new Date().toISOString() });
+    // Keep only last N entries
+    while (syncLog.length > MAX_LOG_ENTRIES) syncLog.shift();
+    await chrome.storage.local.set({ syncLog });
+  } catch (e) {
+    console.error('[BMaestro] Failed to write sync log:', e);
+  }
+}
+
 // Apply operations from other browsers
 async function applyOperations(operations: SyncOperation[]): Promise<ApplyStats> {
   const stats: ApplyStats = {
@@ -250,17 +274,25 @@ async function applyOperations(operations: SyncOperation[]): Promise<ApplyStats>
     const bPayload = b.payload as any;
 
     // Calculate depth from folderPath
+    // Items WITHOUT folderPath get depth 9999 (process LAST, not first!)
     const aPath = aPayload?.folderPath || '';
     const bPath = bPayload?.folderPath || '';
-    const aDepth = aPath ? aPath.split('/').length : 0;
-    const bDepth = bPath ? bPath.split('/').length : 0;
+    const aDepth = aPath ? aPath.split('/').length : 9999;
+    const bDepth = bPath ? bPath.split('/').length : 9999;
 
-    // Sort by depth first (shallower items first)
+    // Sort by depth first (shallower items first, missing paths last)
     if (aDepth !== bDepth) {
       return aDepth - bDepth;
     }
 
-    // Same depth: if different parents, sort by parent path
+    // Same depth: folders before bookmarks (ensure folder structure exists)
+    const aIsFolder = aPayload?.isFolder || !aPayload?.url;
+    const bIsFolder = bPayload?.isFolder || !bPayload?.url;
+    if (aIsFolder !== bIsFolder) {
+      return aIsFolder ? -1 : 1; // folders first
+    }
+
+    // Same depth & type: if different parents, sort by parent path
     if (aPath !== bPath) {
       return aPath.localeCompare(bPath);
     }
@@ -321,15 +353,19 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
 
   // Handle folders - create them if they don't exist
   if (payload.isFolder || !payload.url) {
-    console.log(`[BMaestro] applyAdd: processing FOLDER "${payload.title}" with folderPath="${payload.folderPath || 'MISSING'}"`);
     // Resolve parent folder by path
     const parentId = await resolveParentByPath(payload.folderPath, payload.folderType);
     if (!parentId) {
-      console.log(`[BMaestro] applyAdd: FOLDER "${payload.title}" - parent resolution failed, skipping`);
+      await addSyncLog({
+        action: 'ADD_FOLDER',
+        title: payload.title,
+        path: payload.folderPath,
+        result: 'error',
+        details: 'Parent resolution failed'
+      });
       if (stats) stats.foldersSkipped++;
       return;
     }
-    console.log(`[BMaestro] applyAdd: FOLDER "${payload.title}" - resolved parentId=${parentId}`);
 
     // Check if folder already exists in parent
     const parent = await chrome.bookmarks.getSubTree(parentId);
@@ -338,68 +374,104 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
     );
 
     if (existingFolder) {
+      await addSyncLog({
+        action: 'ADD_FOLDER',
+        title: payload.title,
+        path: payload.folderPath,
+        result: 'skipped',
+        details: 'Already exists'
+      });
       if (stats) stats.foldersSkipped++;
       return;
     }
 
-    // Create the folder (don't use index - it causes "Index out of bounds" errors
-    // when creating items out of order or when destination has fewer items)
+    // Create the folder
     try {
       const created = await chrome.bookmarks.create({
         parentId,
         title: payload.title,
       });
-      // Add to recently synced to prevent echo back to cloud
       recentlySyncedIds.add(created.id);
       setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
+      await addSyncLog({
+        action: 'ADD_FOLDER',
+        title: payload.title,
+        path: payload.folderPath,
+        result: 'success',
+        details: `Created in ${parentId}`
+      });
       if (stats) stats.foldersCreated++;
     } catch (err) {
-      console.error('[BMaestro] Failed to create folder:', payload.title, err);
+      await addSyncLog({
+        action: 'ADD_FOLDER',
+        title: payload.title,
+        path: payload.folderPath,
+        result: 'error',
+        details: String(err)
+      });
       if (stats) stats.errors++;
     }
     return;
   }
 
-  // Handle bookmarks - check for duplicates
+  // Handle bookmarks - check for duplicates BY URL
   const existing = await chrome.bookmarks.search({ url: payload.url });
   if (existing.length > 0) {
+    // Log WHERE the duplicate was found
+    const existingPaths = existing.map(e => e.parentId).join(', ');
+    await addSyncLog({
+      action: 'ADD_BOOKMARK',
+      title: payload.title,
+      path: payload.folderPath,
+      result: 'skipped',
+      details: `Duplicate URL exists in parentIds: ${existingPaths}`
+    });
     if (stats) stats.bookmarksSkipped++;
     return;
   }
 
-  // Resolve parent ID by path first, then fall back to folder type
-  let parentId = await resolveParentByPath(payload.folderPath, payload.folderType);
-  let usedFallback = false;
-  if (!parentId) {
-    console.log(`[BMaestro] applyAdd: path resolution failed for "${payload.title}", folderPath="${payload.folderPath}", trying fallback...`);
-    parentId = await resolveParentId(payload.parentNativeId, payload.folderType);
-    usedFallback = true;
-  }
+  // Resolve parent ID by path - NO FALLBACK to root (that causes flattening!)
+  const parentId = await resolveParentByPath(payload.folderPath, payload.folderType);
 
   if (!parentId) {
-    console.log(`[BMaestro] applyAdd: could not resolve parent for "${payload.title}", skipping`);
+    // Don't fall back to root - that's what causes bookmarks to appear in wrong places
+    await addSyncLog({
+      action: 'ADD_BOOKMARK',
+      title: payload.title,
+      path: payload.folderPath,
+      result: 'error',
+      details: `Path resolution failed for: ${payload.folderPath}`
+    });
     if (stats) stats.bookmarksSkipped++;
     return;
   }
 
-  if (usedFallback) {
-    console.log(`[BMaestro] applyAdd: WARNING - used fallback parentId=${parentId} for "${payload.title}" (intended path: "${payload.folderPath}")`);
-  }
-
-  // Don't use index - it causes "Index out of bounds" errors when creating items
-  // out of order or when destination folder has fewer items than source
+  // Create the bookmark
   try {
     const created = await chrome.bookmarks.create({
       parentId,
       title: payload.title,
       url: payload.url,
     });
-    // Add to recently synced to prevent echo back to cloud
     recentlySyncedIds.add(created.id);
     setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
+
+    await addSyncLog({
+      action: 'ADD_BOOKMARK',
+      title: payload.title,
+      path: payload.folderPath,
+      result: 'success',
+      details: `Created in ${parentId}`
+    });
     if (stats) stats.bookmarksCreated++;
   } catch (err) {
-    console.error('[BMaestro] Failed to create bookmark:', payload.title, err);
+    await addSyncLog({
+      action: 'ADD_BOOKMARK',
+      title: payload.title,
+      path: payload.folderPath,
+      result: 'error',
+      details: String(err)
+    });
     if (stats) stats.errors++;
   }
 }
@@ -475,33 +547,36 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
   }
 
   // Navigate/create remaining path parts
+  // At this point currentFolder is guaranteed to be defined
+  let folder: chrome.bookmarks.BookmarkTreeNode = currentFolder;
+
   for (let i = 1; i < parts.length; i++) {
     const partName = parts[i];
-    console.log(`[BMaestro] resolveParentByPath: step ${i}/${parts.length-1} - looking for "${partName}" in "${currentFolder.title}"`);
+    console.log(`[BMaestro] resolveParentByPath: step ${i}/${parts.length-1} - looking for "${partName}" in "${folder.title}"`);
 
     // Get fresh subtree for current folder
-    const subtree = await chrome.bookmarks.getSubTree(currentFolder.id);
-    const children = subtree[0].children || [];
+    const subtree = await chrome.bookmarks.getSubTree(folder.id);
+    const children: chrome.bookmarks.BookmarkTreeNode[] = subtree[0].children || [];
 
     // Find matching child folder (case-insensitive, trimmed)
-    let childFolder = children.find(
-      c => !c.url && c.title.trim().toLowerCase() === partName.toLowerCase()
+    let childFolder: chrome.bookmarks.BookmarkTreeNode | undefined = children.find(
+      (c: chrome.bookmarks.BookmarkTreeNode) => !c.url && c.title.trim().toLowerCase() === partName.toLowerCase()
     );
 
     if (childFolder) {
       console.log(`[BMaestro] resolveParentByPath: found existing folder "${childFolder.title}" (id: ${childFolder.id})`);
     } else {
       // Log available children to help debug
-      const folderChildren = children.filter(c => !c.url);
-      console.log(`[BMaestro] resolveParentByPath: folder "${partName}" not found. Available folders: ${folderChildren.map(c => `"${c.title}"`).join(', ') || '(none)'}`);
+      const folderChildren = children.filter((c: chrome.bookmarks.BookmarkTreeNode) => !c.url);
+      console.log(`[BMaestro] resolveParentByPath: folder "${partName}" not found. Available folders: ${folderChildren.map((c: chrome.bookmarks.BookmarkTreeNode) => `"${c.title}"`).join(', ') || '(none)'}`);
     }
 
     // Create folder if it doesn't exist
     if (!childFolder) {
-      console.log(`[BMaestro] Creating intermediate folder "${partName}" in ${currentFolder.title}`);
+      console.log(`[BMaestro] Creating intermediate folder "${partName}" in ${folder.title}`);
       try {
         const created = await chrome.bookmarks.create({
-          parentId: currentFolder.id,
+          parentId: folder.id,
           title: partName,
         });
         // Add to recently synced to prevent echo back to cloud
@@ -515,11 +590,11 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
       }
     }
 
-    currentFolder = childFolder;
+    folder = childFolder;
   }
 
-  console.log(`[BMaestro] resolveParentByPath: SUCCESS - resolved "${folderPath}" to folder ID ${currentFolder.id} ("${currentFolder.title}")`);
-  return currentFolder.id;
+  console.log(`[BMaestro] resolveParentByPath: SUCCESS - resolved "${folderPath}" to folder ID ${folder.id} ("${folder.title}")`);
+  return folder.id;
 }
 
 async function applyUpdate(op: SyncOperation): Promise<void> {
@@ -641,7 +716,7 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
       index: bookmark.index,
       isFolder,
     },
-    timestamp: new Date().toISOString(),
+    timestamp: Date.now(),
   });
 
   // Immediate sync for user actions
@@ -665,7 +740,7 @@ chrome.bookmarks.onChanged.addListener(async (id, changes) => {
       title: changes.title,
       url: changes.url,
     },
-    timestamp: new Date().toISOString(),
+    timestamp: Date.now(),
   });
 
   client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
@@ -694,7 +769,7 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
         url: removeInfo.node.url,
         title: removeInfo.node.title,
       },
-      timestamp: new Date().toISOString(),
+      timestamp: Date.now(),
     });
 
     client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
@@ -745,7 +820,7 @@ chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
       oldIndex: moveInfo.oldIndex,
       newIndex: moveInfo.index,
     },
-    timestamp: new Date().toISOString(),
+    timestamp: Date.now(),
   });
 
   client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
@@ -941,6 +1016,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'GET_SYNC_LOG') {
+    (async () => {
+      try {
+        const { syncLog = [] } = await chrome.storage.local.get('syncLog');
+        sendResponse({ success: true, log: syncLog });
+      } catch (err: any) {
+        sendResponse({ success: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (message.type === 'CLEAR_SYNC_LOG') {
+    (async () => {
+      try {
+        await chrome.storage.local.set({ syncLog: [] });
+        sendResponse({ success: true });
+      } catch (err: any) {
+        sendResponse({ success: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
+  }
+
   if (message.type === 'DEBUG_EXPORT') {
     console.log('[BMaestro] Generating debug export...');
     (async () => {
@@ -1045,7 +1144,7 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
           index: folder.node.index,
           isFolder: true,
         },
-        timestamp: new Date().toISOString(),
+        timestamp: Date.now(),
       });
       folderCount++;
     }
@@ -1070,7 +1169,7 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
             url: node.url,
             index: node.index,
           },
-          timestamp: new Date().toISOString(),
+          timestamp: Date.now(),
         });
         bookmarkCount++;
       }
@@ -1341,16 +1440,19 @@ async function generateDebugExport(): Promise<{ success: boolean; data: any }> {
     totalFolders: items.filter(i => i.type === 'folder').length,
     totalBookmarks: items.filter(i => i.type === 'bookmark').length,
     rootFolders: Object.keys(byRootFolder),
-    sampleItems: items.slice(0, 50), // First 50 items for quick view
   };
 
-  console.log('[BMaestro] Debug export summary:', JSON.stringify(summary, null, 2));
-  console.log('[BMaestro] Full debug data available - copy from below:');
-  console.log('=== DEBUG EXPORT START ===');
-  console.log(JSON.stringify({ summary, byRootFolder }, null, 2));
-  console.log('=== DEBUG EXPORT END ===');
+  console.log('[BMaestro] Debug export:', summary);
 
-  return { success: true, data: summary };
+  // Return full data for download
+  return {
+    success: true,
+    data: {
+      ...summary,
+      byRootFolder, // Full structure grouped by root
+      allItems: items, // Complete flat list with paths
+    }
+  };
 }
 
 // Export for popup access

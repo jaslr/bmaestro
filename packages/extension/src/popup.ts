@@ -595,7 +595,8 @@ async function init(): Promise<void> {
     const resetFromCanonicalBtn = document.getElementById('resetFromCanonical') as HTMLButtonElement | null;
 
     // Show/hide reset button based on canonical status (only show if NOT canonical)
-    function updateResetButtonVisibility(): void {
+    // Show/hide clear server data button (only show if IS canonical - source of truth)
+    function updateButtonVisibility(): void {
       if (resetFromCanonicalBtn) {
         if (stored.isCanonical === true) {
           resetFromCanonicalBtn.classList.add('hidden');
@@ -603,15 +604,22 @@ async function init(): Promise<void> {
           resetFromCanonicalBtn.classList.remove('hidden');
         }
       }
+      if (clearServerDataBtn) {
+        if (stored.isCanonical === true) {
+          clearServerDataBtn.classList.remove('hidden');
+        } else {
+          clearServerDataBtn.classList.add('hidden');
+        }
+      }
     }
-    updateResetButtonVisibility();
+    updateButtonVisibility();
 
-    // Update reset button visibility when canonical toggle changes
+    // Update button visibility when canonical toggle changes
     if (canonicalToggle) {
       canonicalToggle.addEventListener('change', () => {
         // Update stored value for visibility check
         stored.isCanonical = canonicalToggle.checked;
-        updateResetButtonVisibility();
+        updateButtonVisibility();
       });
     }
 
@@ -717,7 +725,7 @@ async function init(): Promise<void> {
       });
     }
 
-    // Debug export - shows bookmark structure in console
+    // Debug export - downloads bookmark structure as JSON file
     const debugExportBtn = document.getElementById('debugExport') as HTMLButtonElement | null;
     if (debugExportBtn) {
       debugExportBtn.addEventListener('click', async () => {
@@ -727,8 +735,29 @@ async function init(): Promise<void> {
 
           const response = await chrome.runtime.sendMessage({ type: 'DEBUG_EXPORT' });
           if (response?.success) {
-            showNotification(`Exported ${response.data.totalFolders} folders, ${response.data.totalBookmarks} bookmarks - check DevTools console`, 'success');
-            console.log('[Popup] Debug export data:', response.data);
+            // Get browser type for filename
+            const ua = navigator.userAgent;
+            const browser = ua.includes('Brave') ? 'brave' :
+                           ua.includes('Edg') ? 'edge' : 'chrome';
+
+            // Create downloadable JSON file
+            const exportData = {
+              exportedAt: new Date().toISOString(),
+              browser,
+              ...response.data
+            };
+
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bmaestro-debug-${browser}-${Date.now()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            showNotification(`Downloaded debug file: ${response.data.totalFolders} folders, ${response.data.totalBookmarks} bookmarks`, 'success');
           } else {
             showNotification(`Export failed: ${response?.error || 'Unknown error'}`, 'error');
           }
@@ -739,6 +768,46 @@ async function init(): Promise<void> {
 
         debugExportBtn.disabled = false;
         debugExportBtn.textContent = 'Debug: Export Structure';
+      });
+    }
+
+    // Sync log download
+    const syncLogBtn = document.getElementById('syncLogBtn') as HTMLButtonElement | null;
+    if (syncLogBtn) {
+      syncLogBtn.addEventListener('click', async () => {
+        try {
+          syncLogBtn.disabled = true;
+          syncLogBtn.textContent = 'Getting log...';
+
+          const response = await chrome.runtime.sendMessage({ type: 'GET_SYNC_LOG' });
+          if (response?.success && response.log) {
+            // Get browser type for filename
+            const ua = navigator.userAgent;
+            const browser = ua.includes('Brave') ? 'brave' :
+                           ua.includes('Edg') ? 'edge' : 'chrome';
+
+            const blob = new Blob([JSON.stringify(response.log, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bmaestro-synclog-${browser}-${Date.now()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            const fallbacks = response.log.filter((e: any) => e.result === 'fallback').length;
+            const errors = response.log.filter((e: any) => e.result === 'error').length;
+            showNotification(`Downloaded ${response.log.length} entries (${fallbacks} fallbacks, ${errors} errors)`, 'success');
+          } else {
+            showNotification(`Failed: ${response?.error || 'No log data'}`, 'error');
+          }
+        } catch (err: any) {
+          showNotification(`Error: ${err.message || err}`, 'error');
+        }
+
+        syncLogBtn.disabled = false;
+        syncLogBtn.textContent = 'Debug: Download Sync Log';
       });
     }
 

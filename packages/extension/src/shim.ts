@@ -1,27 +1,26 @@
 // Browser shims for Node.js globals - must be imported first!
-declare global {
-  var process: any;
-  var exports: any;
-  var module: any;
-}
+// These shims provide minimal compatibility for libraries that expect Node.js globals
 
-if (typeof globalThis.process === 'undefined') {
-  globalThis.process = {
+// Use a more permissive approach to avoid conflicts with @types/node
+const _globalThis = globalThis as Record<string, unknown>;
+
+if (typeof _globalThis.process === 'undefined') {
+  _globalThis.process = {
     env: {},
     browser: true,
     version: 'v20.0.0',
     versions: {},
     platform: 'browser',
-    nextTick: (cb: Function, ...args: any[]) => setTimeout(() => cb(...args), 0),
+    nextTick: (cb: Function, ...args: unknown[]) => setTimeout(() => cb(...args), 0),
   };
 }
 
-if (typeof globalThis.exports === 'undefined') {
-  globalThis.exports = {};
+if (typeof _globalThis.exports === 'undefined') {
+  _globalThis.exports = {};
 }
 
-if (typeof globalThis.module === 'undefined') {
-  globalThis.module = { exports: globalThis.exports };
+if (typeof _globalThis.module === 'undefined') {
+  _globalThis.module = { exports: _globalThis.exports };
 }
 
 export {};

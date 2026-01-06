@@ -54,9 +54,15 @@ export class CloudClient {
   }
 
   // Queue an operation for next sync
-  queueOperation(op: SyncOperation): void {
-    this.pendingOperations.push(op);
-    console.log('[Cloud] Queued operation:', op.opType, 'pending:', this.pendingOperations.length);
+  // Accepts partial operations and fills in defaults for vectorClock and sourceDeviceId
+  queueOperation(op: Omit<SyncOperation, 'vectorClock' | 'sourceDeviceId'> & Partial<Pick<SyncOperation, 'vectorClock' | 'sourceDeviceId'>>): void {
+    const fullOp: SyncOperation = {
+      ...op,
+      vectorClock: op.vectorClock || {},
+      sourceDeviceId: op.sourceDeviceId || this.config?.deviceId || 'unknown',
+    };
+    this.pendingOperations.push(fullOp);
+    console.log('[Cloud] Queued operation:', fullOp.opType, 'pending:', this.pendingOperations.length);
   }
 
   // Register handler for incoming sync operations
