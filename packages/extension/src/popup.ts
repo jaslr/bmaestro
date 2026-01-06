@@ -649,7 +649,9 @@ async function init(): Promise<void> {
               statusEl.className = 'value disconnected';
             }
           } else if (response.success) {
-            showNotification(`Reset complete! Synced ${response.count || 0} items`, 'success');
+            const details = response.details ? ` (${response.details})` : '';
+            showNotification(`Reset complete! Synced ${response.count || 0} items${details}`, 'success');
+            console.log('[Popup] Reset success:', response);
             if (statusEl) {
               statusEl.textContent = 'Sync complete';
               statusEl.className = 'value connected';

@@ -1072,7 +1072,23 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
 
     // Step 3: Sync to pull ALL bookmarks from canonical browser
     const syncResult = await client.sync();
-    console.log('[BMaestro] Sync result:', JSON.stringify(syncResult));
+
+    // Detailed logging for debugging
+    const ops = syncResult.operations || [];
+    const addOps = ops.filter(o => o.opType === 'ADD');
+    const deleteOps = ops.filter(o => o.opType === 'DELETE');
+    const updateOps = ops.filter(o => o.opType === 'UPDATE');
+
+    console.log(`[BMaestro] Sync result: success=${syncResult.success}, total=${ops.length} ops (ADD=${addOps.length}, DELETE=${deleteOps.length}, UPDATE=${updateOps.length})`);
+    console.log(`[BMaestro] lastSyncVersion returned: ${syncResult.lastSyncVersion}`);
+
+    if (addOps.length > 0) {
+      console.log('[BMaestro] Sample ADD operations:', addOps.slice(0, 3).map(o => ({
+        title: (o.payload as any)?.title,
+        url: (o.payload as any)?.url?.substring(0, 50),
+        folderPath: (o.payload as any)?.folderPath,
+      })));
+    }
 
     if (!syncResult.success) {
       return {
@@ -1083,13 +1099,14 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
     }
 
     // Count how many items were synced
-    const syncedCount = syncResult.operations?.length || 0;
+    const syncedCount = ops.length;
 
     console.log(`[BMaestro] Reset complete: deleted ${deletedCount}, synced ${syncedCount} items`);
 
     return {
       success: true,
       count: syncedCount,
+      details: `Received ${addOps.length} ADD, ${deleteOps.length} DELETE, ${updateOps.length} UPDATE`,
     };
   } catch (err) {
     console.error('[BMaestro] Reset from canonical error:', err);
