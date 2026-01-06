@@ -243,29 +243,35 @@ async function applyOperations(operations: SyncOperation[]): Promise<ApplyStats>
     errors: 0,
   };
 
-  // CRITICAL: Sort operations so folders are created before bookmarks
-  // This ensures parent folders exist when bookmarks are added
+  // Sort operations by path depth to ensure parent folders exist before children
+  // But preserve original order (by index) for siblings at the same level
   const sortedOps = [...operations].sort((a, b) => {
     const aPayload = a.payload as any;
     const bPayload = b.payload as any;
-    const aIsFolder = aPayload?.isFolder || !aPayload?.url;
-    const bIsFolder = bPayload?.isFolder || !bPayload?.url;
 
-    // Folders come before bookmarks
-    if (aIsFolder && !bIsFolder) return -1;
-    if (!aIsFolder && bIsFolder) return 1;
+    // Calculate depth from folderPath
+    const aPath = aPayload?.folderPath || '';
+    const bPath = bPayload?.folderPath || '';
+    const aDepth = aPath ? aPath.split('/').length : 0;
+    const bDepth = bPath ? bPath.split('/').length : 0;
 
-    // Within folders, sort by path depth (shallower folders first)
-    if (aIsFolder && bIsFolder) {
-      const aDepth = (aPayload?.folderPath || '').split('/').length;
-      const bDepth = (bPayload?.folderPath || '').split('/').length;
+    // Sort by depth first (shallower items first)
+    if (aDepth !== bDepth) {
       return aDepth - bDepth;
     }
 
-    return 0;
+    // Same depth: if different parents, sort by parent path
+    if (aPath !== bPath) {
+      return aPath.localeCompare(bPath);
+    }
+
+    // Same parent: sort by index to preserve original order
+    const aIndex = aPayload?.index ?? 999;
+    const bIndex = bPayload?.index ?? 999;
+    return aIndex - bIndex;
   });
 
-  console.log(`[BMaestro] Applying ${sortedOps.length} operations (${sortedOps.filter(op => (op.payload as any)?.isFolder).length} folders first)`);
+  console.log(`[BMaestro] Applying ${sortedOps.length} operations sorted by depth then index`);
 
   for (const op of sortedOps) {
     try {
