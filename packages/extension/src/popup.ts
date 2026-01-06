@@ -717,6 +717,31 @@ async function init(): Promise<void> {
       });
     }
 
+    // Debug export - shows bookmark structure in console
+    const debugExportBtn = document.getElementById('debugExport') as HTMLButtonElement | null;
+    if (debugExportBtn) {
+      debugExportBtn.addEventListener('click', async () => {
+        try {
+          debugExportBtn.disabled = true;
+          debugExportBtn.textContent = 'Exporting...';
+
+          const response = await chrome.runtime.sendMessage({ type: 'DEBUG_EXPORT' });
+          if (response?.success) {
+            showNotification(`Exported ${response.data.totalFolders} folders, ${response.data.totalBookmarks} bookmarks - check DevTools console`, 'success');
+            console.log('[Popup] Debug export data:', response.data);
+          } else {
+            showNotification(`Export failed: ${response?.error || 'Unknown error'}`, 'error');
+          }
+        } catch (err: any) {
+          console.error('[Popup] Debug export error:', err);
+          showNotification(`Export failed: ${err.message || err}`, 'error');
+        }
+
+        debugExportBtn.disabled = false;
+        debugExportBtn.textContent = 'Debug: Export Structure';
+      });
+    }
+
     // Interval change
     if (intervalSelect) {
       intervalSelect.addEventListener('change', async () => {

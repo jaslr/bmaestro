@@ -940,6 +940,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+
+  if (message.type === 'DEBUG_EXPORT') {
+    console.log('[BMaestro] Generating debug export...');
+    (async () => {
+      try {
+        const result = await generateDebugExport();
+        sendResponse(result);
+      } catch (err: any) {
+        console.error('[BMaestro] Debug export failed:', err);
+        sendResponse({ success: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
+  }
 });
 
 // Full sync - export all bookmarks AND folders
@@ -1261,6 +1275,82 @@ async function clearServerData(): Promise<{ success: boolean; deleted: number; e
     console.error('[BMaestro] Failed to clear server data:', err);
     return { success: false, deleted: 0, error: String(err) };
   }
+}
+
+// Generate debug export - shows what would be synced with full paths
+async function generateDebugExport(): Promise<{ success: boolean; data: any }> {
+  const tree = await chrome.bookmarks.getTree();
+  const root = tree[0];
+
+  interface DebugItem {
+    type: 'folder' | 'bookmark';
+    title: string;
+    fullPath: string;
+    url?: string;
+    index: number;
+    nativeId: string;
+  }
+
+  const items: DebugItem[] = [];
+
+  function collectItems(node: chrome.bookmarks.BookmarkTreeNode, parentPath: string): void {
+    const fullPath = parentPath ? `${parentPath}/${node.title}` : node.title;
+
+    if (node.url) {
+      items.push({
+        type: 'bookmark',
+        title: node.title,
+        fullPath: parentPath, // Parent path for bookmarks
+        url: node.url,
+        index: node.index ?? 0,
+        nativeId: node.id,
+      });
+    } else if (node.title) {
+      // It's a folder (skip root node which has no title)
+      items.push({
+        type: 'folder',
+        title: node.title,
+        fullPath: parentPath, // Parent path for folders
+        index: node.index ?? 0,
+        nativeId: node.id,
+      });
+    }
+
+    if (node.children) {
+      for (const child of node.children) {
+        collectItems(child, fullPath);
+      }
+    }
+  }
+
+  collectItems(root, '');
+
+  // Group by root folder for easier viewing
+  const byRootFolder: Record<string, DebugItem[]> = {};
+  for (const item of items) {
+    const rootFolder = item.fullPath.split('/')[0] || '(root)';
+    if (!byRootFolder[rootFolder]) {
+      byRootFolder[rootFolder] = [];
+    }
+    byRootFolder[rootFolder].push(item);
+  }
+
+  // Summary stats
+  const summary = {
+    browser: browserType,
+    totalFolders: items.filter(i => i.type === 'folder').length,
+    totalBookmarks: items.filter(i => i.type === 'bookmark').length,
+    rootFolders: Object.keys(byRootFolder),
+    sampleItems: items.slice(0, 50), // First 50 items for quick view
+  };
+
+  console.log('[BMaestro] Debug export summary:', JSON.stringify(summary, null, 2));
+  console.log('[BMaestro] Full debug data available - copy from below:');
+  console.log('=== DEBUG EXPORT START ===');
+  console.log(JSON.stringify({ summary, byRootFolder }, null, 2));
+  console.log('=== DEBUG EXPORT END ===');
+
+  return { success: true, data: summary };
 }
 
 // Export for popup access
