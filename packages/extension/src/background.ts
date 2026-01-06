@@ -91,22 +91,25 @@ async function resolveParentId(foreignParentId: string, folderType?: FolderType)
   if (folderType && folderType !== 'unknown') {
     const localId = await getLocalFolderIdByType(folderType);
     if (localId) {
-      console.log(`[BMaestro] Resolved folder type ${folderType} to local ID ${localId}`);
       return localId;
     }
   }
 
-  // Fallback: try common ID mappings
-  // All browsers typically use "1" for bookmarks bar, but check if it exists
+  // Try the foreignParentId but ONLY if it's actually a folder (not a bookmark)
   try {
-    await chrome.bookmarks.get(foreignParentId);
-    return foreignParentId;
+    const [node] = await chrome.bookmarks.get(foreignParentId);
+    // Only use this ID if it's a folder (no url property)
+    if (node && !node.url) {
+      return foreignParentId;
+    }
+    // It's a bookmark, not a folder - fall through to default
   } catch {
-    // ID doesn't exist, fall back to bookmarks bar
-    const bookmarksBarId = await getLocalFolderIdByType('bookmarks-bar');
-    console.log(`[BMaestro] Parent ID ${foreignParentId} not found, falling back to bookmarks bar (${bookmarksBarId})`);
-    return bookmarksBarId || '1';
+    // ID doesn't exist - fall through to default
   }
+
+  // Fall back to bookmarks bar
+  const bookmarksBarId = await getLocalFolderIdByType('bookmarks-bar');
+  return bookmarksBarId || '1';
 }
 
 // Flag to prevent cleanup deletions from triggering sync
@@ -1123,10 +1126,15 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
     console.log(`[BMaestro] lastSyncVersion returned: ${syncResult.lastSyncVersion}`);
 
     if (addOps.length > 0) {
-      console.log('[BMaestro] Sample ADD operations:', addOps.slice(0, 3).map(o => ({
+      // Check how many operations have proper folderPath data
+      const withPath = addOps.filter(o => (o.payload as any)?.folderPath);
+      const withType = addOps.filter(o => (o.payload as any)?.folderType);
+      console.log(`[BMaestro] Operations with folderPath: ${withPath.length}/${addOps.length}, with folderType: ${withType.length}/${addOps.length}`);
+      console.log('[BMaestro] Sample ADD operations:', addOps.slice(0, 5).map(o => ({
         title: (o.payload as any)?.title,
-        url: (o.payload as any)?.url?.substring(0, 50),
-        folderPath: (o.payload as any)?.folderPath,
+        folderPath: (o.payload as any)?.folderPath || 'MISSING',
+        folderType: (o.payload as any)?.folderType || 'MISSING',
+        isFolder: (o.payload as any)?.isFolder,
       })));
     }
 
