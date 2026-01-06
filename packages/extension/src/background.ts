@@ -321,12 +321,15 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
 
   // Handle folders - create them if they don't exist
   if (payload.isFolder || !payload.url) {
+    console.log(`[BMaestro] applyAdd: processing FOLDER "${payload.title}" with folderPath="${payload.folderPath || 'MISSING'}"`);
     // Resolve parent folder by path
     const parentId = await resolveParentByPath(payload.folderPath, payload.folderType);
     if (!parentId) {
+      console.log(`[BMaestro] applyAdd: FOLDER "${payload.title}" - parent resolution failed, skipping`);
       if (stats) stats.foldersSkipped++;
       return;
     }
+    console.log(`[BMaestro] applyAdd: FOLDER "${payload.title}" - resolved parentId=${parentId}`);
 
     // Check if folder already exists in parent
     const parent = await chrome.bookmarks.getSubTree(parentId);
@@ -366,13 +369,21 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
 
   // Resolve parent ID by path first, then fall back to folder type
   let parentId = await resolveParentByPath(payload.folderPath, payload.folderType);
+  let usedFallback = false;
   if (!parentId) {
+    console.log(`[BMaestro] applyAdd: path resolution failed for "${payload.title}", folderPath="${payload.folderPath}", trying fallback...`);
     parentId = await resolveParentId(payload.parentNativeId, payload.folderType);
+    usedFallback = true;
   }
 
   if (!parentId) {
+    console.log(`[BMaestro] applyAdd: could not resolve parent for "${payload.title}", skipping`);
     if (stats) stats.bookmarksSkipped++;
     return;
+  }
+
+  if (usedFallback) {
+    console.log(`[BMaestro] applyAdd: WARNING - used fallback parentId=${parentId} for "${payload.title}" (intended path: "${payload.folderPath}")`);
   }
 
   try {
@@ -418,15 +429,21 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
     return null;
   }
 
-  const parts = folderPath.split('/').filter(p => p.trim());
+  // Trim whitespace from path parts
+  const parts = folderPath.split('/').map(p => p.trim()).filter(p => p);
   if (parts.length === 0) {
     console.log('[BMaestro] resolveParentByPath: empty path after split');
     return null;
   }
 
+  console.log(`[BMaestro] resolveParentByPath: resolving "${folderPath}" (${parts.length} parts: ${JSON.stringify(parts)})`);
+
   const tree = await chrome.bookmarks.getTree();
   const root = tree[0];
-  if (!root.children) return null;
+  if (!root.children) {
+    console.log('[BMaestro] resolveParentByPath: no root children');
+    return null;
+  }
 
   // First part should be a root folder type
   const rootName = parts[0].toLowerCase();
@@ -437,16 +454,19 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
     if (rootName.includes('bookmarks bar') || rootName.includes('bookmark bar')) {
       if (title.includes('bookmarks bar') || title.includes('bookmark bar')) {
         currentFolder = folder;
+        console.log(`[BMaestro] resolveParentByPath: matched root "${folder.title}" (id: ${folder.id})`);
         break;
       }
     } else if (rootName.includes('other bookmark')) {
       if (title.includes('other bookmark')) {
         currentFolder = folder;
+        console.log(`[BMaestro] resolveParentByPath: matched root "${folder.title}" (id: ${folder.id})`);
         break;
       }
     } else if (rootName.includes('mobile bookmark')) {
       if (title.includes('mobile bookmark')) {
         currentFolder = folder;
+        console.log(`[BMaestro] resolveParentByPath: matched root "${folder.title}" (id: ${folder.id})`);
         break;
       }
     }
@@ -462,27 +482,37 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
         // Get full subtree
         const subtree = await chrome.bookmarks.getSubTree(localId);
         currentFolder = subtree[0];
+        console.log(`[BMaestro] resolveParentByPath: fallback to "${currentFolder.title}" (id: ${currentFolder.id})`);
       }
     }
   }
 
   if (!currentFolder) {
-    console.log(`[BMaestro] resolveParentByPath: could not resolve root for path "${folderPath}"`);
+    console.log(`[BMaestro] resolveParentByPath: could not resolve root for path "${folderPath}". Available roots: ${root.children.map(c => c.title).join(', ')}`);
     return null;
   }
 
   // Navigate/create remaining path parts
   for (let i = 1; i < parts.length; i++) {
     const partName = parts[i];
+    console.log(`[BMaestro] resolveParentByPath: step ${i}/${parts.length-1} - looking for "${partName}" in "${currentFolder.title}"`);
 
     // Get fresh subtree for current folder
     const subtree = await chrome.bookmarks.getSubTree(currentFolder.id);
     const children = subtree[0].children || [];
 
-    // Find matching child folder (case-insensitive)
+    // Find matching child folder (case-insensitive, trimmed)
     let childFolder = children.find(
-      c => !c.url && c.title.toLowerCase() === partName.toLowerCase()
+      c => !c.url && c.title.trim().toLowerCase() === partName.toLowerCase()
     );
+
+    if (childFolder) {
+      console.log(`[BMaestro] resolveParentByPath: found existing folder "${childFolder.title}" (id: ${childFolder.id})`);
+    } else {
+      // Log available children to help debug
+      const folderChildren = children.filter(c => !c.url);
+      console.log(`[BMaestro] resolveParentByPath: folder "${partName}" not found. Available folders: ${folderChildren.map(c => `"${c.title}"`).join(', ') || '(none)'}`);
+    }
 
     // Create folder if it doesn't exist
     if (!childFolder) {
@@ -496,6 +526,7 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
         recentlySyncedIds.add(created.id);
         setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
         childFolder = created;
+        console.log(`[BMaestro] resolveParentByPath: created folder "${partName}" (id: ${created.id})`);
       } catch (err) {
         console.error(`[BMaestro] Failed to create intermediate folder "${partName}":`, err);
         return null;
@@ -505,7 +536,7 @@ async function resolveParentByPath(folderPath?: string, folderType?: FolderType)
     currentFolder = childFolder;
   }
 
-  console.log(`[BMaestro] resolveParentByPath: resolved "${folderPath}" to folder ID ${currentFolder.id}`);
+  console.log(`[BMaestro] resolveParentByPath: SUCCESS - resolved "${folderPath}" to folder ID ${currentFolder.id} ("${currentFolder.title}")`);
   return currentFolder.id;
 }
 
