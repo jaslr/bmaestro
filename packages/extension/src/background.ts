@@ -220,8 +220,25 @@ client.onSync((operations) => {
   applyOperations(operations);
 });
 
+// Stats for tracking what actually happened during apply
+interface ApplyStats {
+  foldersCreated: number;
+  foldersSkipped: number;
+  bookmarksCreated: number;
+  bookmarksSkipped: number;
+  errors: number;
+}
+
 // Apply operations from other browsers
-async function applyOperations(operations: SyncOperation[]): Promise<void> {
+async function applyOperations(operations: SyncOperation[]): Promise<ApplyStats> {
+  const stats: ApplyStats = {
+    foldersCreated: 0,
+    foldersSkipped: 0,
+    bookmarksCreated: 0,
+    bookmarksSkipped: 0,
+    errors: 0,
+  };
+
   // CRITICAL: Sort operations so folders are created before bookmarks
   // This ensures parent folders exist when bookmarks are added
   const sortedOps = [...operations].sort((a, b) => {
@@ -259,7 +276,7 @@ async function applyOperations(operations: SyncOperation[]): Promise<void> {
 
       switch (op.opType) {
         case 'ADD':
-          await applyAdd(op);
+          await applyAdd(op, stats);
           break;
         case 'UPDATE':
           await applyUpdate(op);
@@ -273,11 +290,15 @@ async function applyOperations(operations: SyncOperation[]): Promise<void> {
       }
     } catch (err) {
       console.error('[BMaestro] Failed to apply operation:', op.id, err);
+      stats.errors++;
     }
   }
+
+  console.log('[BMaestro] Apply stats:', stats);
+  return stats;
 }
 
-async function applyAdd(op: SyncOperation): Promise<void> {
+async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
   const payload = op.payload as {
     parentNativeId: string;
     folderType?: FolderType;
@@ -290,12 +311,10 @@ async function applyAdd(op: SyncOperation): Promise<void> {
 
   // Handle folders - create them if they don't exist
   if (payload.isFolder || !payload.url) {
-    console.log(`[BMaestro] Processing folder: ${payload.title}, path: ${payload.folderPath}`);
-
     // Resolve parent folder by path
     const parentId = await resolveParentByPath(payload.folderPath, payload.folderType);
     if (!parentId) {
-      console.log('[BMaestro] Could not resolve parent for folder:', payload.title);
+      if (stats) stats.foldersSkipped++;
       return;
     }
 
@@ -306,7 +325,7 @@ async function applyAdd(op: SyncOperation): Promise<void> {
     );
 
     if (existingFolder) {
-      console.log('[BMaestro] Folder already exists:', payload.title);
+      if (stats) stats.foldersSkipped++;
       return;
     }
 
@@ -319,9 +338,10 @@ async function applyAdd(op: SyncOperation): Promise<void> {
       // Add to recently synced to prevent echo back to cloud
       recentlySyncedIds.add(created.id);
       setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
-      console.log('[BMaestro] Created folder:', payload.title, 'id:', created.id);
+      if (stats) stats.foldersCreated++;
     } catch (err) {
-      console.error('[BMaestro] Failed to create folder:', err);
+      console.error('[BMaestro] Failed to create folder:', payload.title, err);
+      if (stats) stats.errors++;
     }
     return;
   }
@@ -329,7 +349,7 @@ async function applyAdd(op: SyncOperation): Promise<void> {
   // Handle bookmarks - check for duplicates
   const existing = await chrome.bookmarks.search({ url: payload.url });
   if (existing.length > 0) {
-    console.log('[BMaestro] Skipping duplicate bookmark:', payload.url);
+    if (stats) stats.bookmarksSkipped++;
     return;
   }
 
@@ -338,7 +358,11 @@ async function applyAdd(op: SyncOperation): Promise<void> {
   if (!parentId) {
     parentId = await resolveParentId(payload.parentNativeId, payload.folderType);
   }
-  console.log(`[BMaestro] Creating bookmark in parent ${parentId} (path: ${payload.folderPath}, type: ${payload.folderType})`);
+
+  if (!parentId) {
+    if (stats) stats.bookmarksSkipped++;
+    return;
+  }
 
   try {
     const created = await chrome.bookmarks.create({
@@ -349,13 +373,12 @@ async function applyAdd(op: SyncOperation): Promise<void> {
     // Add to recently synced to prevent echo back to cloud
     recentlySyncedIds.add(created.id);
     setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
-    console.log('[BMaestro] Created bookmark:', payload.title, 'in folder:', parentId);
+    if (stats) stats.bookmarksCreated++;
   } catch (err) {
-    console.error('[BMaestro] Failed to create bookmark:', err);
+    console.error('[BMaestro] Failed to create bookmark:', payload.title, err);
     // Try creating in bookmarks bar as last resort
     const fallbackId = await getLocalFolderIdByType('bookmarks-bar');
     if (fallbackId && fallbackId !== parentId) {
-      console.log('[BMaestro] Retrying in bookmarks bar...');
       try {
         const created = await chrome.bookmarks.create({
           parentId: fallbackId,
@@ -364,9 +387,13 @@ async function applyAdd(op: SyncOperation): Promise<void> {
         });
         recentlySyncedIds.add(created.id);
         setTimeout(() => recentlySyncedIds.delete(created.id), DEDUPE_TIMEOUT_MS);
+        if (stats) stats.bookmarksCreated++;
       } catch (fallbackErr) {
-        console.error('[BMaestro] Failed to create bookmark in fallback location:', fallbackErr);
+        console.error('[BMaestro] Failed to create bookmark in fallback:', payload.title, fallbackErr);
+        if (stats) stats.errors++;
       }
+    } else {
+      if (stats) stats.errors++;
     }
   }
 }
@@ -1040,14 +1067,18 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
 
     let deletedCount = 0;
 
+    // Log ALL root folders to debug folder name issues
+    console.log('[BMaestro] Root folders found:', root.children.map(f => ({ id: f.id, title: f.title })));
+
     // Find and clear the main bookmark folders
     for (const folder of root.children) {
       const title = folder.title.toLowerCase();
-      // Only clear Bookmarks Bar and Other Bookmarks
-      if (title.includes('bookmarks bar') || title.includes('bookmark bar') ||
-          title.includes('other bookmark')) {
+      // Only clear Bookmarks Bar and Other Bookmarks (various browser names)
+      const isBookmarksBar = title.includes('bookmarks bar') || title.includes('bookmark bar') || title === 'bookmarks';
+      const isOtherBookmarks = title.includes('other bookmark') || title === 'other';
 
-        console.log(`[BMaestro] Clearing folder: ${folder.title}`);
+      if (isBookmarksBar || isOtherBookmarks) {
+        console.log(`[BMaestro] Clearing folder: ${folder.title} (id: ${folder.id})`);
 
         // Get children and delete them (can't delete the root folders themselves)
         const subtree = await chrome.bookmarks.getSubTree(folder.id);
@@ -1109,11 +1140,12 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
 
     // Step 4: Apply operations directly (don't rely on async onSync handler)
     // The onSync handler will also be called but we await here for proper error handling
+    let applyStats: ApplyStats | null = null;
     if (addOps.length > 0) {
       console.log(`[BMaestro] Directly applying ${addOps.length} ADD operations...`);
       try {
-        await applyOperations(addOps);
-        console.log(`[BMaestro] Successfully applied ${addOps.length} ADD operations`);
+        applyStats = await applyOperations(addOps);
+        console.log(`[BMaestro] Apply complete:`, applyStats);
       } catch (applyErr: any) {
         console.error('[BMaestro] Error applying operations:', applyErr);
         return {
@@ -1125,12 +1157,15 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
       }
     }
 
-    console.log(`[BMaestro] Reset complete: deleted ${deletedCount}, applied ${addOps.length} items`);
+    const created = applyStats ? (applyStats.foldersCreated + applyStats.bookmarksCreated) : 0;
+    const skipped = applyStats ? (applyStats.foldersSkipped + applyStats.bookmarksSkipped) : 0;
+
+    console.log(`[BMaestro] Reset complete: deleted ${deletedCount}, created ${created}, skipped ${skipped}`);
 
     return {
       success: true,
-      count: addOps.length,
-      details: `Applied ${addOps.length} ADD, ${deleteOps.length} DELETE, ${updateOps.length} UPDATE`,
+      count: created,
+      details: `Created ${applyStats?.foldersCreated || 0} folders + ${applyStats?.bookmarksCreated || 0} bookmarks, skipped ${skipped} duplicates, ${applyStats?.errors || 0} errors`,
     };
   } catch (err) {
     console.error('[BMaestro] Reset from canonical error:', err);
