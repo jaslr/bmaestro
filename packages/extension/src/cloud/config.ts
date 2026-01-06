@@ -10,7 +10,7 @@ export const CLOUD_CONFIG = {
 };
 
 // Current extension version - must match manifest.json
-export const EXTENSION_VERSION = '1.10.20';
+export const EXTENSION_VERSION = '1.10.21';
 
 export interface StoredConfig {
   syncSecret: string;

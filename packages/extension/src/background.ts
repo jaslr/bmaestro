@@ -4,6 +4,7 @@ import './shim.js';
 import { CloudClient } from './cloud/client.js';
 import { buildBookmarkTree } from './bookmarks/tree-builder.js';
 import { checkForUpdate } from './updater.js';
+import { CLOUD_CONFIG, getConfig } from './cloud/config.js';
 import type { BrowserType, SyncOperation } from '@bmaestro/shared/types';
 
 // Detect browser type
