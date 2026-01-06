@@ -206,9 +206,17 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 
+// Flag to prevent double-processing during reset
+let resetInProgress = false;
+
 // Listen for incoming sync operations
 client.onSync((operations) => {
   console.log('[BMaestro] Received sync delta:', operations.length, 'operations');
+  // Skip if reset is handling operations directly
+  if (resetInProgress) {
+    console.log('[BMaestro] Skipping onSync handler - reset in progress');
+    return;
+  }
   applyOperations(operations);
 });
 
@@ -1017,8 +1025,9 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
 }
 
 // Reset from canonical - clear all bookmarks and re-sync from Chrome
-async function resetFromCanonical(): Promise<{ success: boolean; count: number; error?: string }> {
+async function resetFromCanonical(): Promise<{ success: boolean; count: number; error?: string; details?: string }> {
   console.log('[BMaestro] Starting reset from canonical...');
+  resetInProgress = true;
 
   try {
     // Step 1: Delete all bookmarks in the Bookmarks Bar and Other Bookmarks
@@ -1098,15 +1107,30 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
       };
     }
 
-    // Count how many items were synced
-    const syncedCount = ops.length;
+    // Step 4: Apply operations directly (don't rely on async onSync handler)
+    // The onSync handler will also be called but we await here for proper error handling
+    if (addOps.length > 0) {
+      console.log(`[BMaestro] Directly applying ${addOps.length} ADD operations...`);
+      try {
+        await applyOperations(addOps);
+        console.log(`[BMaestro] Successfully applied ${addOps.length} ADD operations`);
+      } catch (applyErr: any) {
+        console.error('[BMaestro] Error applying operations:', applyErr);
+        return {
+          success: false,
+          count: deletedCount,
+          error: `Apply failed: ${applyErr?.message || String(applyErr)}`,
+          details: `Received ${addOps.length} ADD but failed to apply`,
+        };
+      }
+    }
 
-    console.log(`[BMaestro] Reset complete: deleted ${deletedCount}, synced ${syncedCount} items`);
+    console.log(`[BMaestro] Reset complete: deleted ${deletedCount}, applied ${addOps.length} items`);
 
     return {
       success: true,
-      count: syncedCount,
-      details: `Received ${addOps.length} ADD, ${deleteOps.length} DELETE, ${updateOps.length} UPDATE`,
+      count: addOps.length,
+      details: `Applied ${addOps.length} ADD, ${deleteOps.length} DELETE, ${updateOps.length} UPDATE`,
     };
   } catch (err) {
     console.error('[BMaestro] Reset from canonical error:', err);
@@ -1115,6 +1139,8 @@ async function resetFromCanonical(): Promise<{ success: boolean; count: number; 
       count: 0,
       error: String(err),
     };
+  } finally {
+    resetInProgress = false;
   }
 }
 
