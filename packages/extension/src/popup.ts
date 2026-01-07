@@ -628,6 +628,8 @@ async function init(): Promise<void> {
 
     // Reset from Source of Truth button
     const resetFromCanonicalBtn = document.getElementById('resetFromCanonical') as HTMLButtonElement | null;
+    // Clear Server Data button (declared here for use in updateButtonVisibility)
+    const clearServerDataBtn = document.getElementById('clearServerData') as HTMLButtonElement | null;
 
     // Show/hide reset button based on canonical status (only show if NOT canonical)
     // Show/hide clear server data button (only show if IS canonical - source of truth)
@@ -729,8 +731,7 @@ async function init(): Promise<void> {
       });
     }
 
-    // Clear Server Data button
-    const clearServerDataBtn = document.getElementById('clearServerData') as HTMLButtonElement | null;
+    // Clear Server Data button event listener
     if (clearServerDataBtn) {
       clearServerDataBtn.addEventListener('click', async () => {
         if (!confirm('This will delete ALL sync operations from the server.\n\nAfter this, you should:\n1. Click "Full Sync (Export All)" in Chrome (Source of Truth)\n2. Click "Reset from Source of Truth" in other browsers\n\nContinue?')) {
