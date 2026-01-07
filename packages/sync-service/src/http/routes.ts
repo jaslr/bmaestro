@@ -5,14 +5,22 @@ import { handleExtensionDownload } from './extension-download.js';
 import { handleVersionCheck } from './version.js';
 import { handleUpdateManifest } from './update-manifest.js';
 import {
+  queueOperation,
   queueDeletion,
+  getPendingOperations,
   getPendingDeletions,
+  acceptOperation,
   acceptDeletion,
+  rejectOperation,
   rejectDeletion,
+  acceptAllOperations,
   acceptAllDeletions,
+  rejectAllOperations,
   rejectAllDeletions,
   setCanonicalBrowser,
   getCanonicalBrowser,
+  type OperationType,
+  type PendingOperation,
 } from './moderation.js';
 
 function parseBody(req: IncomingMessage): Promise<any> {
@@ -308,91 +316,289 @@ export async function handleHttpRequest(
     return true;
   }
 
-  // POST /moderation/queue - Queue a deletion for moderation
+  // POST /moderation/queue - Queue an operation for moderation
   if (path === '/moderation/queue' && method === 'POST') {
     const body = await parseBody(req);
+    const operationType: OperationType = body.operationType || 'DELETE';
 
-    const pending = queueDeletion(userId, {
+    const pending = queueOperation(userId, {
       browser: body.browser || 'unknown',
+      operationType,
       url: body.url,
       title: body.title,
+      folderPath: body.folderPath,
       parentId: body.parentId,
+      // For UPDATE operations - store previous values
+      previousTitle: body.previousTitle,
+      previousUrl: body.previousUrl,
+      previousParentId: body.previousParentId,
     });
 
-    json(res, { success: true, id: pending.id });
+    json(res, { success: true, id: pending.id, operationType });
     return true;
   }
 
-  // GET /moderation/pending - Get pending deletions
+  // GET /moderation/pending - Get pending operations
   if (path === '/moderation/pending' && method === 'GET') {
-    const items = getPendingDeletions(userId);
+    const items = getPendingOperations(userId);
     json(res, { items });
     return true;
   }
 
-  // POST /moderation/:id/accept - Accept a deletion
+  // POST /moderation/:id/accept - Accept an operation
   if (path.match(/^\/moderation\/[^/]+\/accept$/) && method === 'POST') {
     const id = path.split('/')[2];
-    const accepted = acceptDeletion(userId, id);
+    const accepted = acceptOperation(userId, id);
 
     if (!accepted) {
-      json(res, { error: 'Deletion not found' }, 404);
+      json(res, { error: 'Operation not found' }, 404);
       return true;
     }
 
-    // Log the deletion as accepted (it will be synced to other browsers)
+    // Log based on operation type
+    const actionMap: Record<OperationType, string> = {
+      'ADD': 'BOOKMARK_ADD',
+      'UPDATE': 'BOOKMARK_UPDATE',
+      'DELETE': 'BOOKMARK_DELETE',
+    };
+
     await logActivity({
       user_id: userId,
       device_id: 'moderation',
-      action: 'BOOKMARK_DELETE',
+      action: actionMap[accepted.operationType],
       bookmark_url: accepted.url,
       bookmark_title: accepted.title,
       browser_type: accepted.browser as 'chrome' | 'brave' | 'edge',
       timestamp: new Date().toISOString(),
     });
 
-    json(res, { success: true, deleted: accepted });
+    // Queue accepted operation for syncing to all browsers
+    try {
+      const { pb } = await import('../pocketbase.js');
+      const newVersion = Date.now();
+
+      if (accepted.operationType === 'ADD') {
+        // Queue ADD operation
+        await pb.collection('sync_operations').create({
+          user_id: userId,
+          device_id: 'moderation-accepted',
+          op_type: 'ADD',
+          bookmark_id: `accepted-${accepted.id}`,
+          payload: {
+            url: accepted.url,
+            title: accepted.title,
+            folderPath: accepted.folderPath,
+            parentNativeId: accepted.parentId,
+            isModerated: true,
+          },
+          version: newVersion,
+          timestamp: newVersion,
+        });
+        console.log(`[Moderation] Queued ADD for sync: ${accepted.title}`);
+      } else if (accepted.operationType === 'UPDATE') {
+        // Queue UPDATE operation
+        await pb.collection('sync_operations').create({
+          user_id: userId,
+          device_id: 'moderation-accepted',
+          op_type: 'UPDATE',
+          bookmark_id: `accepted-${accepted.id}`,
+          payload: {
+            url: accepted.url,
+            title: accepted.title,
+            isModerated: true,
+          },
+          version: newVersion,
+          timestamp: newVersion,
+        });
+        console.log(`[Moderation] Queued UPDATE for sync: ${accepted.title}`);
+      } else if (accepted.operationType === 'DELETE') {
+        // Queue DELETE operation
+        await pb.collection('sync_operations').create({
+          user_id: userId,
+          device_id: 'moderation-accepted',
+          op_type: 'DELETE',
+          bookmark_id: `accepted-${accepted.id}`,
+          payload: {
+            url: accepted.url,
+            title: accepted.title,
+            isModerated: true,
+          },
+          version: newVersion,
+          timestamp: newVersion,
+        });
+        console.log(`[Moderation] Queued DELETE for sync: ${accepted.title}`);
+      }
+    } catch (err) {
+      console.error('[Moderation] Failed to queue accepted operation:', err);
+    }
+
+    json(res, { success: true, accepted, operationType: accepted.operationType });
     return true;
   }
 
-  // POST /moderation/:id/reject - Reject a deletion
+  // POST /moderation/:id/reject - Reject an operation
   if (path.match(/^\/moderation\/[^/]+\/reject$/) && method === 'POST') {
     const id = path.split('/')[2];
-    const rejected = rejectDeletion(userId, id);
+    const rejected = rejectOperation(userId, id);
 
     if (!rejected) {
-      json(res, { error: 'Deletion not found' }, 404);
+      json(res, { error: 'Operation not found' }, 404);
       return true;
     }
 
-    json(res, { success: true, rejected });
-    return true;
-  }
+    // Queue reversal operation for the originating browser to undo
+    try {
+      const { pb } = await import('../pocketbase.js');
+      const newVersion = Date.now();
 
-  // POST /moderation/accept-all - Accept all pending deletions
-  if (path === '/moderation/accept-all' && method === 'POST') {
-    const accepted = acceptAllDeletions(userId);
-
-    for (const item of accepted) {
-      await logActivity({
-        user_id: userId,
-        device_id: 'moderation',
-        action: 'BOOKMARK_DELETE',
-        bookmark_url: item.url,
-        bookmark_title: item.title,
-        browser_type: item.browser as 'chrome' | 'brave' | 'edge',
-        timestamp: new Date().toISOString(),
-      });
+      if (rejected.operationType === 'ADD' && rejected.url) {
+        // Reject ADD: Queue DELETE to remove from originating browser
+        await pb.collection('sync_operations').create({
+          user_id: userId,
+          device_id: 'moderation-reversal',
+          op_type: 'DELETE',
+          bookmark_id: `reversal-${rejected.id}`,
+          payload: {
+            url: rejected.url,
+            title: rejected.title,
+            isReversal: true,
+          },
+          version: newVersion,
+          timestamp: newVersion,
+        });
+        console.log(`[Moderation] Queued DELETE reversal for rejected ADD: ${rejected.title}`);
+      } else if (rejected.operationType === 'UPDATE' && rejected.previousTitle) {
+        // Reject UPDATE: Queue UPDATE with previous values to revert
+        await pb.collection('sync_operations').create({
+          user_id: userId,
+          device_id: 'moderation-reversal',
+          op_type: 'UPDATE',
+          bookmark_id: `reversal-${rejected.id}`,
+          payload: {
+            url: rejected.previousUrl || rejected.url,
+            title: rejected.previousTitle,
+            newTitle: rejected.previousTitle,
+            newUrl: rejected.previousUrl,
+            isReversal: true,
+          },
+          version: newVersion,
+          timestamp: newVersion,
+        });
+        console.log(`[Moderation] Queued UPDATE reversal for rejected UPDATE: ${rejected.title} -> ${rejected.previousTitle}`);
+      }
+      // DELETE rejections need no reversal - bookmark stays
+    } catch (err) {
+      console.error('[Moderation] Failed to queue reversal:', err);
     }
 
-    json(res, { success: true, count: accepted.length });
+    // Return rejected with reversal info
+    json(res, { success: true, rejected, operationType: rejected.operationType });
     return true;
   }
 
-  // POST /moderation/reject-all - Reject all pending deletions
+  // POST /moderation/accept-all - Accept all pending operations
+  if (path === '/moderation/accept-all' && method === 'POST') {
+    const accepted = acceptAllOperations(userId);
+
+    const actionMap: Record<OperationType, string> = {
+      'ADD': 'BOOKMARK_ADD',
+      'UPDATE': 'BOOKMARK_UPDATE',
+      'DELETE': 'BOOKMARK_DELETE',
+    };
+
+    // Log and queue all accepted operations
+    try {
+      const { pb } = await import('../pocketbase.js');
+      const newVersion = Date.now();
+
+      for (const item of accepted) {
+        await logActivity({
+          user_id: userId,
+          device_id: 'moderation',
+          action: actionMap[item.operationType],
+          bookmark_url: item.url,
+          bookmark_title: item.title,
+          browser_type: item.browser as 'chrome' | 'brave' | 'edge',
+          timestamp: new Date().toISOString(),
+        });
+
+        // Queue for sync
+        await pb.collection('sync_operations').create({
+          user_id: userId,
+          device_id: 'moderation-accepted',
+          op_type: item.operationType,
+          bookmark_id: `accepted-${item.id}`,
+          payload: {
+            url: item.url,
+            title: item.title,
+            folderPath: item.folderPath,
+            parentNativeId: item.parentId,
+            isModerated: true,
+          },
+          version: newVersion,
+          timestamp: newVersion,
+        });
+      }
+      console.log(`[Moderation] Queued ${accepted.length} accepted operations for sync`);
+    } catch (err) {
+      console.error('[Moderation] Failed to queue accepted operations:', err);
+    }
+
+    json(res, { success: true, count: accepted.length, accepted });
+    return true;
+  }
+
+  // POST /moderation/reject-all - Reject all pending operations
   if (path === '/moderation/reject-all' && method === 'POST') {
-    const rejected = rejectAllDeletions(userId);
-    json(res, { success: true, count: rejected.length });
+    const rejected = rejectAllOperations(userId);
+
+    // Queue reversal operations for all rejected items
+    try {
+      const { pb } = await import('../pocketbase.js');
+      const newVersion = Date.now();
+
+      for (const item of rejected) {
+        if (item.operationType === 'ADD' && item.url) {
+          // Reject ADD: Queue DELETE
+          await pb.collection('sync_operations').create({
+            user_id: userId,
+            device_id: 'moderation-reversal',
+            op_type: 'DELETE',
+            bookmark_id: `reversal-${item.id}`,
+            payload: {
+              url: item.url,
+              title: item.title,
+              isReversal: true,
+            },
+            version: newVersion,
+            timestamp: newVersion,
+          });
+        } else if (item.operationType === 'UPDATE' && item.previousTitle) {
+          // Reject UPDATE: Queue UPDATE with previous values
+          await pb.collection('sync_operations').create({
+            user_id: userId,
+            device_id: 'moderation-reversal',
+            op_type: 'UPDATE',
+            bookmark_id: `reversal-${item.id}`,
+            payload: {
+              url: item.previousUrl || item.url,
+              title: item.previousTitle,
+              newTitle: item.previousTitle,
+              newUrl: item.previousUrl,
+              isReversal: true,
+            },
+            version: newVersion,
+            timestamp: newVersion,
+          });
+        }
+      }
+      console.log(`[Moderation] Queued reversals for ${rejected.length} rejected operations`);
+    } catch (err) {
+      console.error('[Moderation] Failed to queue reversals:', err);
+    }
+
+    // Return all rejected items
+    json(res, { success: true, count: rejected.length, rejected });
     return true;
   }
 

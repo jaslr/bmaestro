@@ -25,6 +25,36 @@ const DEDUPE_TIMEOUT_MS = 2000;
 // Track recently synced IDs to prevent infinite loops
 const recentlySyncedIds = new Set<string>();
 
+// Bookmark cache for tracking previous values (needed for UPDATE moderation)
+interface CachedBookmark {
+  title: string;
+  url?: string;
+}
+const bookmarkCache = new Map<string, CachedBookmark>();
+
+// Populate bookmark cache on startup
+async function refreshBookmarkCache(): Promise<void> {
+  const tree = await chrome.bookmarks.getTree();
+  bookmarkCache.clear();
+
+  function cacheNode(node: chrome.bookmarks.BookmarkTreeNode): void {
+    if (node.url) {
+      bookmarkCache.set(node.id, { title: node.title, url: node.url });
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        cacheNode(child);
+      }
+    }
+  }
+
+  for (const root of tree) {
+    cacheNode(root);
+  }
+
+  console.log(`[BMaestro] Bookmark cache populated with ${bookmarkCache.size} items`);
+}
+
 // Folder type mapping - these are consistent folder names across browsers
 type FolderType = 'bookmarks-bar' | 'other-bookmarks' | 'mobile-bookmarks' | 'unknown';
 
@@ -143,10 +173,11 @@ async function refreshIcon(): Promise<void> {
 }
 
 // Initialize client
-client.initialize().then(() => {
+client.initialize().then(async () => {
   console.log('[BMaestro] CloudClient initialized');
   setupAlarm();
   refreshIcon(); // Force icon refresh on startup
+  await refreshBookmarkCache(); // Populate cache for UPDATE tracking
 });
 
 // Set up periodic sync alarm
@@ -695,6 +726,11 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
 
   console.log('[BMaestro] Bookmark created:', id);
 
+  // Update cache with new bookmark
+  if (bookmark.url) {
+    bookmarkCache.set(id, { title: bookmark.title, url: bookmark.url });
+  }
+
   // Get folder type and path for cross-browser compatibility
   const folderType = bookmark.parentId ? await getFolderTypeById(bookmark.parentId) : 'unknown';
   const folderPath = bookmark.parentId ? await getFolderPath(bookmark.parentId) : undefined;
@@ -702,25 +738,58 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
   // Determine if this is a folder
   const isFolder = !bookmark.url;
 
-  client.queueOperation({
-    id: crypto.randomUUID(),
-    opType: 'ADD',
-    bookmarkId: id,
-    payload: {
-      nativeId: id,
-      parentNativeId: bookmark.parentId,
-      folderType,
-      folderPath,
-      title: bookmark.title,
-      url: bookmark.url,
-      index: bookmark.index,
-      isFolder,
-    },
-    timestamp: Date.now(),
-  });
+  // Check if this browser is canonical (source of truth)
+  const { isCanonical, userId, syncSecret } = await chrome.storage.local.get(['isCanonical', 'userId', 'syncSecret']);
 
-  // Immediate sync for user actions
-  client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
+  if (isCanonical) {
+    // Canonical browser: sync directly
+    client.queueOperation({
+      id: crypto.randomUUID(),
+      opType: 'ADD',
+      bookmarkId: id,
+      payload: {
+        nativeId: id,
+        parentNativeId: bookmark.parentId,
+        folderType,
+        folderPath,
+        title: bookmark.title,
+        url: bookmark.url,
+        index: bookmark.index,
+        isFolder,
+      },
+      timestamp: Date.now(),
+    });
+
+    // Immediate sync for user actions
+    client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
+  } else {
+    // Non-canonical browser: queue for moderation
+    console.log('[BMaestro] Queuing ADD for moderation (non-canonical browser)');
+
+    if (userId && syncSecret) {
+      try {
+        await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${syncSecret}`,
+            'X-User-Id': userId,
+          },
+          body: JSON.stringify({
+            operationType: 'ADD',
+            browser: browserType,
+            url: bookmark.url,
+            title: bookmark.title,
+            folderPath,
+            parentId: bookmark.parentId,
+          }),
+        });
+        console.log('[BMaestro] ADD queued for moderation');
+      } catch (err) {
+        console.error('[BMaestro] Failed to queue ADD for moderation:', err);
+      }
+    }
+  }
 });
 
 chrome.bookmarks.onChanged.addListener(async (id, changes) => {
@@ -731,19 +800,67 @@ chrome.bookmarks.onChanged.addListener(async (id, changes) => {
 
   console.log('[BMaestro] Bookmark changed:', id);
 
-  client.queueOperation({
-    id: crypto.randomUUID(),
-    opType: 'UPDATE',
-    bookmarkId: id,
-    payload: {
-      nativeId: id,
-      title: changes.title,
-      url: changes.url,
-    },
-    timestamp: Date.now(),
-  });
+  // Get previous values from cache before updating
+  const previous = bookmarkCache.get(id);
 
-  client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
+  // Update cache with new values
+  if (changes.title !== undefined || changes.url !== undefined) {
+    const current = bookmarkCache.get(id) || { title: '', url: undefined };
+    bookmarkCache.set(id, {
+      title: changes.title ?? current.title,
+      url: changes.url ?? current.url,
+    });
+  }
+
+  // Check if this browser is canonical (source of truth)
+  const { isCanonical, userId, syncSecret } = await chrome.storage.local.get(['isCanonical', 'userId', 'syncSecret']);
+
+  if (isCanonical) {
+    // Canonical browser: sync directly
+    client.queueOperation({
+      id: crypto.randomUUID(),
+      opType: 'UPDATE',
+      bookmarkId: id,
+      payload: {
+        nativeId: id,
+        title: changes.title,
+        url: changes.url,
+      },
+      timestamp: Date.now(),
+    });
+
+    client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
+  } else {
+    // Non-canonical browser: queue for moderation with previous values
+    console.log('[BMaestro] Queuing UPDATE for moderation (non-canonical browser)');
+
+    if (userId && syncSecret) {
+      try {
+        // Get current bookmark to get URL if not in changes
+        const [bookmark] = await chrome.bookmarks.get(id);
+
+        await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${syncSecret}`,
+            'X-User-Id': userId,
+          },
+          body: JSON.stringify({
+            operationType: 'UPDATE',
+            browser: browserType,
+            url: changes.url ?? bookmark?.url,
+            title: changes.title ?? bookmark?.title,
+            previousTitle: previous?.title,
+            previousUrl: previous?.url,
+          }),
+        });
+        console.log('[BMaestro] UPDATE queued for moderation');
+      } catch (err) {
+        console.error('[BMaestro] Failed to queue UPDATE for moderation:', err);
+      }
+    }
+  }
 });
 
 chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
@@ -775,7 +892,7 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
     client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
   } else {
     // Non-canonical browser: queue for moderation instead of direct delete
-    console.log('[BMaestro] Queuing deletion for moderation (non-canonical browser)');
+    console.log('[BMaestro] Queuing DELETE for moderation (non-canonical browser)');
 
     if (userId && syncSecret) {
       try {
@@ -787,18 +904,22 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
             'X-User-Id': userId,
           },
           body: JSON.stringify({
+            operationType: 'DELETE',
             browser: browserType,
             url: removeInfo.node.url,
             title: removeInfo.node.title,
             parentId: removeInfo.parentId,
           }),
         });
-        console.log('[BMaestro] Deletion queued for moderation');
+        console.log('[BMaestro] DELETE queued for moderation');
       } catch (err) {
-        console.error('[BMaestro] Failed to queue deletion for moderation:', err);
+        console.error('[BMaestro] Failed to queue DELETE for moderation:', err);
       }
     }
   }
+
+  // Remove from cache
+  bookmarkCache.delete(id);
 });
 
 chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {

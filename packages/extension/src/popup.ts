@@ -194,23 +194,29 @@ async function init(): Promise<void> {
         // Update list
         if (moderationList) {
           if (items.length === 0) {
-            moderationList.innerHTML = '<div class="moderation-empty">No pending deletions</div>';
+            moderationList.innerHTML = '<div class="moderation-empty">No pending operations</div>';
           } else {
-            moderationList.innerHTML = items.map((item: any) => `
-              <div class="moderation-item" data-id="${item.id}">
+            moderationList.innerHTML = items.map((item: any) => {
+              const opType = item.operationType || 'DELETE';
+              const actionVerb = opType === 'ADD' ? 'Added by' : opType === 'UPDATE' ? 'Updated by' : 'Deleted by';
+              const folderInfo = item.folderPath ? ` · ${item.folderPath}` : '';
+
+              return `
+              <div class="moderation-item" data-id="${item.id}" data-op-type="${opType}">
                 <div class="moderation-info">
-                  <span class="moderation-title">${escapeHtml(item.title || 'Untitled')}</span>
+                  <span class="moderation-title">${opType}: ${escapeHtml(item.title || 'Untitled')}</span>
                   <span class="moderation-meta">
-                    Deleted by <span class="browser">${item.browser || 'unknown'}</span>
-                    ${item.url ? ` · ${truncateUrl(item.url)}` : ''}
+                    ${actionVerb} <span class="browser">${item.browser || 'unknown'}</span>
+                    ${item.url ? ` · ${truncateUrl(item.url)}` : ''}${folderInfo}
                   </span>
                 </div>
                 <div class="moderation-btns">
-                  <button class="btn small mod-accept" data-id="${item.id}">Accept</button>
-                  <button class="btn small warning mod-reject" data-id="${item.id}">Reject</button>
+                  <button class="btn small mod-accept" data-id="${item.id}" data-op-type="${opType}">Accept</button>
+                  <button class="btn small warning mod-reject" data-id="${item.id}" data-op-type="${opType}">Reject</button>
                 </div>
               </div>
-            `).join('');
+            `;
+            }).join('');
 
             // Attach event listeners (CSP-compliant)
             moderationList.querySelectorAll('.mod-accept').forEach(btn => {
@@ -272,23 +278,47 @@ async function init(): Promise<void> {
 
         if (response.ok) {
           const result = await response.json();
-          const item = result.deleted || result.rejected;
+          const item = result.accepted || result.rejected;
+          const opType = result.operationType || item?.operationType || 'DELETE';
 
-          if (action === 'accept' && item?.url) {
-            // Check if bookmark exists locally and delete it
-            const existing = await chrome.bookmarks.search({ url: item.url });
-            if (existing.length > 0) {
-              for (const bookmark of existing) {
-                await chrome.bookmarks.remove(bookmark.id);
+          if (action === 'accept') {
+            // Handle accept based on operation type
+            if (opType === 'DELETE' && item?.url) {
+              // Delete: remove bookmark locally
+              const existing = await chrome.bookmarks.search({ url: item.url });
+              if (existing.length > 0) {
+                for (const bookmark of existing) {
+                  await chrome.bookmarks.remove(bookmark.id);
+                }
+                showNotification(`Deleted "${item.title || 'bookmark'}" from this browser`, 'success');
+              } else {
+                showNotification(`Accepted deletion (wasn't in this browser)`, 'info');
               }
-              showNotification(`Deleted "${item.title || 'bookmark'}" from this browser`, 'success');
-            } else {
-              showNotification(`Accepted (wasn't in this browser)`, 'info');
+            } else if (opType === 'ADD') {
+              // Add: trigger sync to add bookmark to this browser
+              showNotification(`Accepted "${item?.title || 'bookmark'}" - syncing...`, 'success');
+              chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
+            } else if (opType === 'UPDATE') {
+              // Update: trigger sync to apply update
+              showNotification(`Accepted update to "${item?.title || 'bookmark'}" - syncing...`, 'success');
+              chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
             }
           } else if (action === 'reject') {
-            showNotification(`Rejected - bookmark will stay`, 'success');
-            // Trigger sync to restore bookmark in the other browser
-            chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
+            // Handle reject based on operation type
+            if (opType === 'ADD') {
+              // Reject ADD: bookmark needs to be deleted from originating browser
+              showNotification(`Rejected - bookmark will be removed from ${item?.browser || 'other browser'}`, 'success');
+              // Trigger sync to send reversal
+              chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
+            } else if (opType === 'UPDATE') {
+              // Reject UPDATE: change needs to be reverted in originating browser
+              showNotification(`Rejected - change will be reverted in ${item?.browser || 'other browser'}`, 'success');
+              // Trigger sync to send reversal
+              chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
+            } else if (opType === 'DELETE') {
+              // Reject DELETE: bookmark stays (no action needed)
+              showNotification(`Rejected - bookmark will stay`, 'success');
+            }
           }
 
           loadModerations();
@@ -306,7 +336,7 @@ async function init(): Promise<void> {
 
     if (acceptAllBtn) {
       acceptAllBtn.addEventListener('click', async () => {
-        if (!confirm('Accept all pending deletions?')) return;
+        if (!confirm('Accept all pending operations?')) return;
 
         try {
           const response = await fetch('https://bmaestro-sync.fly.dev/moderation/accept-all', {
@@ -318,8 +348,11 @@ async function init(): Promise<void> {
           });
 
           if (response.ok) {
-            showNotification('All deletions accepted', 'success');
+            const result = await response.json();
+            showNotification(`Accepted ${result.count} operations - syncing...`, 'success');
             loadModerations();
+            // Trigger sync to apply accepted operations
+            chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
           }
         } catch (err: any) {
           showNotification(`Error: ${err.message}`, 'error');
@@ -329,7 +362,7 @@ async function init(): Promise<void> {
 
     if (rejectAllBtn) {
       rejectAllBtn.addEventListener('click', async () => {
-        if (!confirm('Reject all pending deletions? Bookmarks will be restored.')) return;
+        if (!confirm('Reject all pending operations? Changes will be reverted.')) return;
 
         try {
           const response = await fetch('https://bmaestro-sync.fly.dev/moderation/reject-all', {
@@ -341,8 +374,10 @@ async function init(): Promise<void> {
           });
 
           if (response.ok) {
-            showNotification('All deletions rejected', 'success');
+            const result = await response.json();
+            showNotification(`Rejected ${result.count} operations - reverting...`, 'success');
             loadModerations();
+            // Trigger sync to send reversals
             chrome.runtime.sendMessage({ type: 'SYNC_NOW' });
           }
         } catch (err: any) {
