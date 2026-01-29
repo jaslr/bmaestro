@@ -34,11 +34,35 @@ export class CloudClient {
   async initialize(): Promise<void> {
     this.config = await getConfig();
 
-    // Generate device ID if not set
+    // Generate device ID if not set (and persist it!)
     if (!this.config.deviceId) {
       this.config.deviceId = `device-${crypto.randomUUID().slice(0, 8)}`;
       await saveConfig({ deviceId: this.config.deviceId });
+      console.log('[Cloud] Generated and saved new device ID:', this.config.deviceId);
     }
+
+    // Load any pending operations from storage (survives service worker restart)
+    await this.loadPendingOperations();
+  }
+
+  // Persist pending operations to storage so they survive service worker restarts
+  private async savePendingOperations(): Promise<void> {
+    await chrome.storage.local.set({ pendingOperations: this.pendingOperations });
+  }
+
+  // Load pending operations from storage
+  private async loadPendingOperations(): Promise<void> {
+    const result = await chrome.storage.local.get('pendingOperations');
+    this.pendingOperations = result.pendingOperations || [];
+    if (this.pendingOperations.length > 0) {
+      console.log('[Cloud] Loaded', this.pendingOperations.length, 'pending operations from storage');
+    }
+  }
+
+  // Clear pending operations from storage
+  private async clearPendingOperations(): Promise<void> {
+    this.pendingOperations = [];
+    await chrome.storage.local.remove('pendingOperations');
   }
 
   isConfigured(): boolean {
@@ -55,13 +79,15 @@ export class CloudClient {
 
   // Queue an operation for next sync
   // Accepts partial operations and fills in defaults for vectorClock and sourceDeviceId
-  queueOperation(op: Omit<SyncOperation, 'vectorClock' | 'sourceDeviceId'> & Partial<Pick<SyncOperation, 'vectorClock' | 'sourceDeviceId'>>): void {
+  async queueOperation(op: Omit<SyncOperation, 'vectorClock' | 'sourceDeviceId'> & Partial<Pick<SyncOperation, 'vectorClock' | 'sourceDeviceId'>>): Promise<void> {
     const fullOp: SyncOperation = {
       ...op,
       vectorClock: op.vectorClock || {},
       sourceDeviceId: op.sourceDeviceId || this.config?.deviceId || 'unknown',
     };
     this.pendingOperations.push(fullOp);
+    // Persist to storage so operations survive service worker restarts
+    await this.savePendingOperations();
     console.log('[Cloud] Queued operation:', fullOp.opType, 'pending:', this.pendingOperations.length);
   }
 
@@ -125,8 +151,8 @@ export class CloudClient {
 
       const result: SyncResult = await response.json();
 
-      // Clear pending operations that were sent
-      this.pendingOperations = [];
+      // Clear pending operations that were sent (from memory AND storage)
+      await this.clearPendingOperations();
 
       // Update stored config
       await saveConfig({

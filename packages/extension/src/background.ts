@@ -172,12 +172,63 @@ async function refreshIcon(): Promise<void> {
   }
 }
 
+// Check for pending moderation items (only for canonical browser)
+async function checkPendingModerations(): Promise<void> {
+  try {
+    const { isCanonical, userId, syncSecret } = await chrome.storage.local.get(['isCanonical', 'userId', 'syncSecret']);
+
+    // Only canonical browser needs to check for pending moderations
+    if (!isCanonical || !userId || !syncSecret) {
+      return;
+    }
+
+    const response = await fetch('https://bmaestro-sync.fly.dev/moderation/pending', {
+      headers: {
+        'Authorization': `Bearer ${syncSecret}`,
+        'X-User-Id': userId,
+      },
+    });
+
+    if (!response.ok) {
+      console.error('[BMaestro] Failed to fetch pending moderations:', response.status);
+      return;
+    }
+
+    const data = await response.json();
+    const pendingCount = data.items?.length || 0;
+
+    // Store pending count for popup
+    await chrome.storage.local.set({ pendingModerationCount: pendingCount });
+
+    // Update badge - moderation items take priority over update badge
+    if (pendingCount > 0) {
+      console.log(`[BMaestro] ${pendingCount} pending moderation item(s)`);
+      chrome.action.setBadgeText({ text: String(pendingCount) });
+      chrome.action.setBadgeBackgroundColor({ color: '#FF6B00' }); // Orange for moderation
+      await chrome.storage.local.set({
+        badgeReason: `${pendingCount} item(s) awaiting moderation`,
+        badgeType: 'moderation',
+      });
+    } else {
+      // Clear moderation badge (but check if update badge should show)
+      const { updateAvailable } = await chrome.storage.local.get('updateAvailable');
+      if (!updateAvailable) {
+        chrome.action.setBadgeText({ text: '' });
+        await chrome.storage.local.remove(['badgeReason', 'badgeType']);
+      }
+    }
+  } catch (err) {
+    console.error('[BMaestro] Error checking pending moderations:', err);
+  }
+}
+
 // Initialize client
 client.initialize().then(async () => {
   console.log('[BMaestro] CloudClient initialized');
   setupAlarm();
   refreshIcon(); // Force icon refresh on startup
   await refreshBookmarkCache(); // Populate cache for UPDATE tracking
+  await checkPendingModerations(); // Check for pending moderations on startup
 });
 
 // Set up periodic sync alarm
@@ -196,7 +247,7 @@ async function setupAlarm(): Promise<void> {
   console.log(`[BMaestro] Sync alarm set for every ${intervalMinutes} minutes`);
 }
 
-// Handle alarm - sync bookmarks AND check for updates
+// Handle alarm - sync bookmarks, check for updates, AND check pending moderations
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
     console.log('[BMaestro] Alarm triggered, syncing and checking updates...');
@@ -206,36 +257,28 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       console.error('[BMaestro] Sync failed:', err);
     });
 
-    // Check for extension updates
+    // Check for pending moderation items (sets badge if any pending)
+    await checkPendingModerations();
+
+    // Check for extension updates (no badge - popup banner is sufficient)
     try {
       const updateInfo = await checkForUpdate();
       if (updateInfo.updateAvailable) {
         console.log(`[BMaestro] Update available: ${updateInfo.currentVersion} -> ${updateInfo.latestVersion}`);
 
-        // Store update info for popup
+        // Store update info for popup banner (no badge - less noisy)
         await chrome.storage.local.set({
           updateAvailable: true,
           latestVersion: updateInfo.latestVersion,
           updateDownloadUrl: updateInfo.downloadUrl,
-          badgeReason: `Update v${updateInfo.latestVersion} available`,
-          badgeType: 'update',
         });
-
-        // Set badge to indicate update - Chrome handles actual update delivery
-        chrome.action.setBadgeText({ text: '!' });
-        chrome.action.setBadgeBackgroundColor({ color: '#03FFE3' });
       } else {
-        // No update available - clear badge and stale storage
-        await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload', 'badgeReason', 'badgeType']);
-        chrome.action.setBadgeText({ text: '' });
+        // No update available - clear update storage
+        await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload']);
       }
     } catch (err) {
       console.error('[BMaestro] Update check failed:', err);
-      // Store error for popup
-      await chrome.storage.local.set({
-        badgeReason: 'Update check failed',
-        badgeType: 'error',
-      });
+      // Silent fail - don't show badge for update check failures
     }
   }
 });
@@ -246,7 +289,16 @@ let resetInProgress = false;
 
 // Listen for incoming sync operations
 client.onSync((operations) => {
-  console.log('[BMaestro] Received sync delta:', operations.length, 'operations');
+  console.log('[BMaestro] 🟢 RECEIVED SYNC DELTA:', operations.length, 'operations');
+  if (operations.length > 0) {
+    console.log('[BMaestro] 🟢 Operations received:', operations.map(op => ({
+      opType: op.opType,
+      title: (op.payload as any)?.title,
+      url: (op.payload as any)?.url,
+      folderPath: (op.payload as any)?.folderPath,
+      sourceDeviceId: op.sourceDeviceId,
+    })));
+  }
   // Skip if reset is handling operations directly
   if (resetInProgress) {
     console.log('[BMaestro] Skipping onSync handler - reset in progress');
@@ -381,6 +433,14 @@ async function applyAdd(op: SyncOperation, stats?: ApplyStats): Promise<void> {
     index?: number;
     isFolder?: boolean;
   };
+
+  console.log('[BMaestro] 🟢 applyAdd called:', {
+    title: payload.title,
+    url: payload.url,
+    folderPath: payload.folderPath,
+    isFolder: payload.isFolder,
+    sourceDeviceId: op.sourceDeviceId,
+  });
 
   // Handle folders - create them if they don't exist
   if (payload.isFolder || !payload.url) {
@@ -743,7 +803,13 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
 
   if (isCanonical) {
     // Canonical browser: sync directly
-    client.queueOperation({
+    console.log('[BMaestro] 🔵 CANONICAL ADD - syncing directly', {
+      bookmarkId: id,
+      title: bookmark.title,
+      url: bookmark.url,
+      folderPath,
+    });
+    await client.queueOperation({
       id: crypto.randomUUID(),
       opType: 'ADD',
       bookmarkId: id,
@@ -764,30 +830,38 @@ chrome.bookmarks.onCreated.addListener(async (id, bookmark) => {
     client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
   } else {
     // Non-canonical browser: queue for moderation
-    console.log('[BMaestro] Queuing ADD for moderation (non-canonical browser)');
+    console.log('[BMaestro] 🟠 NON-CANONICAL ADD - queuing for moderation');
 
     if (userId && syncSecret) {
       try {
-        await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
+        const moderationPayload = {
+          operationType: 'ADD',
+          browser: browserType,
+          url: bookmark.url,
+          title: bookmark.title,
+          folderPath,
+          parentId: bookmark.parentId,
+        };
+
+        console.log('[BMaestro] 🟠 ADD moderation payload:', moderationPayload);
+
+        const response = await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${syncSecret}`,
             'X-User-Id': userId,
           },
-          body: JSON.stringify({
-            operationType: 'ADD',
-            browser: browserType,
-            url: bookmark.url,
-            title: bookmark.title,
-            folderPath,
-            parentId: bookmark.parentId,
-          }),
+          body: JSON.stringify(moderationPayload),
         });
-        console.log('[BMaestro] ADD queued for moderation');
+
+        const result = await response.json();
+        console.log('[BMaestro] 🟠 ADD queued for moderation, response:', result);
       } catch (err) {
         console.error('[BMaestro] Failed to queue ADD for moderation:', err);
       }
+    } else {
+      console.warn('[BMaestro] 🟠 ADD skipped - missing userId or syncSecret');
     }
   }
 });
@@ -817,7 +891,12 @@ chrome.bookmarks.onChanged.addListener(async (id, changes) => {
 
   if (isCanonical) {
     // Canonical browser: sync directly
-    client.queueOperation({
+    console.log('[BMaestro] 🔵 CANONICAL UPDATE - syncing directly', {
+      bookmarkId: id,
+      changes,
+      previous,
+    });
+    await client.queueOperation({
       id: crypto.randomUUID(),
       opType: 'UPDATE',
       bookmarkId: id,
@@ -832,33 +911,41 @@ chrome.bookmarks.onChanged.addListener(async (id, changes) => {
     client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
   } else {
     // Non-canonical browser: queue for moderation with previous values
-    console.log('[BMaestro] Queuing UPDATE for moderation (non-canonical browser)');
+    console.log('[BMaestro] 🟠 NON-CANONICAL UPDATE - queuing for moderation');
 
     if (userId && syncSecret) {
       try {
         // Get current bookmark to get URL if not in changes
         const [bookmark] = await chrome.bookmarks.get(id);
 
-        await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
+        const moderationPayload = {
+          operationType: 'UPDATE',
+          browser: browserType,
+          url: changes.url ?? bookmark?.url,
+          title: changes.title ?? bookmark?.title,
+          previousTitle: previous?.title,
+          previousUrl: previous?.url,
+        };
+
+        console.log('[BMaestro] 🟠 UPDATE moderation payload:', moderationPayload);
+
+        const response = await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${syncSecret}`,
             'X-User-Id': userId,
           },
-          body: JSON.stringify({
-            operationType: 'UPDATE',
-            browser: browserType,
-            url: changes.url ?? bookmark?.url,
-            title: changes.title ?? bookmark?.title,
-            previousTitle: previous?.title,
-            previousUrl: previous?.url,
-          }),
+          body: JSON.stringify(moderationPayload),
         });
-        console.log('[BMaestro] UPDATE queued for moderation');
+
+        const result = await response.json();
+        console.log('[BMaestro] 🟠 UPDATE queued for moderation, response:', result);
       } catch (err) {
         console.error('[BMaestro] Failed to queue UPDATE for moderation:', err);
       }
+    } else {
+      console.warn('[BMaestro] 🟠 UPDATE skipped - missing userId or syncSecret');
     }
   }
 });
@@ -876,7 +963,12 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
 
   if (isCanonical) {
     // Canonical browser: delete syncs directly
-    client.queueOperation({
+    console.log('[BMaestro] 🔵 CANONICAL DELETE - syncing directly', {
+      bookmarkId: id,
+      title: removeInfo.node.title,
+      url: removeInfo.node.url,
+    });
+    await client.queueOperation({
       id: crypto.randomUUID(),
       opType: 'DELETE',
       bookmarkId: id,
@@ -892,29 +984,37 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
     client.sync().catch(err => console.error('[BMaestro] Sync failed:', err));
   } else {
     // Non-canonical browser: queue for moderation instead of direct delete
-    console.log('[BMaestro] Queuing DELETE for moderation (non-canonical browser)');
+    console.log('[BMaestro] 🟠 NON-CANONICAL DELETE - queuing for moderation');
 
     if (userId && syncSecret) {
       try {
-        await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
+        const moderationPayload = {
+          operationType: 'DELETE',
+          browser: browserType,
+          url: removeInfo.node.url,
+          title: removeInfo.node.title,
+          parentId: removeInfo.parentId,
+        };
+
+        console.log('[BMaestro] 🟠 DELETE moderation payload:', moderationPayload);
+
+        const response = await fetch('https://bmaestro-sync.fly.dev/moderation/queue', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${syncSecret}`,
             'X-User-Id': userId,
           },
-          body: JSON.stringify({
-            operationType: 'DELETE',
-            browser: browserType,
-            url: removeInfo.node.url,
-            title: removeInfo.node.title,
-            parentId: removeInfo.parentId,
-          }),
+          body: JSON.stringify(moderationPayload),
         });
-        console.log('[BMaestro] DELETE queued for moderation');
+
+        const result = await response.json();
+        console.log('[BMaestro] 🟠 DELETE queued for moderation, response:', result);
       } catch (err) {
         console.error('[BMaestro] Failed to queue DELETE for moderation:', err);
       }
+    } else {
+      console.warn('[BMaestro] 🟠 DELETE skipped - missing userId or syncSecret');
     }
   }
 
@@ -930,7 +1030,7 @@ chrome.bookmarks.onMoved.addListener(async (id, moveInfo) => {
 
   console.log('[BMaestro] Bookmark moved:', id);
 
-  client.queueOperation({
+  await client.queueOperation({
     id: crypto.randomUUID(),
     opType: 'MOVE',
     bookmarkId: id,
@@ -1015,23 +1115,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log('[BMaestro] UPDATE_AND_SYNC: Syncing bookmarks...');
         const syncResult = await client.sync();
 
-        // Step 2: Check for updates
+        // Step 2: Check for pending moderation items
+        await checkPendingModerations();
+
+        // Step 3: Check for updates (no badge - popup banner is sufficient)
         console.log('[BMaestro] UPDATE_AND_SYNC: Checking for updates...');
         const updateInfo = await checkForUpdate();
 
         if (updateInfo.updateAvailable) {
-          // Store update info
+          // Store update info for popup banner
           await chrome.storage.local.set({
             updateAvailable: true,
             latestVersion: updateInfo.latestVersion,
             updateDownloadUrl: updateInfo.downloadUrl,
-            badgeReason: `Update v${updateInfo.latestVersion} available`,
-            badgeType: 'update',
           });
-
-          // Set badge - Chrome handles actual update delivery
-          chrome.action.setBadgeText({ text: '!' });
-          chrome.action.setBadgeBackgroundColor({ color: '#03FFE3' });
 
           sendResponse({
             success: true,
@@ -1041,10 +1138,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             latestVersion: updateInfo.latestVersion,
           });
         } else {
-          // Clear update flag and badge
+          // Clear update flag
           await chrome.storage.local.set({ updateAvailable: false });
-          await chrome.storage.local.remove(['badgeReason', 'badgeType']);
-          chrome.action.setBadgeText({ text: '' });
 
           sendResponse({
             success: true,
@@ -1056,13 +1151,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       } catch (err: any) {
         console.error('[BMaestro] UPDATE_AND_SYNC failed:', err);
-        // Store error for popup
-        await chrome.storage.local.set({
-          badgeReason: `Sync error: ${err.message || String(err)}`,
-          badgeType: 'error',
-        });
-        chrome.action.setBadgeText({ text: '!' });
-        chrome.action.setBadgeBackgroundColor({ color: '#D4A000' }); // Amber for errors
+        // Store error for popup (but don't override moderation badge)
+        const { pendingModerationCount } = await chrome.storage.local.get('pendingModerationCount');
+        if (!pendingModerationCount || pendingModerationCount === 0) {
+          await chrome.storage.local.set({
+            badgeReason: `Sync error: ${err.message || String(err)}`,
+            badgeType: 'error',
+          });
+          chrome.action.setBadgeText({ text: '!' });
+          chrome.action.setBadgeBackgroundColor({ color: '#D4A000' }); // Amber for errors
+        }
         sendResponse({ success: false, error: err.message || String(err) });
       }
     })();
@@ -1085,7 +1183,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'SYNC_NOW') {
     client.sync()
-      .then((result) => {
+      .then(async (result) => {
+        // Also refresh moderation badge after sync
+        await checkPendingModerations();
         sendResponse({ success: result.success, error: result.error });
       })
       .catch(err => {
@@ -1093,6 +1193,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: String(err) });
       });
     return true; // Keep channel open for async response
+  }
+
+  // Refresh moderation badge (called after popup moderation actions)
+  if (message.type === 'CHECK_MODERATIONS') {
+    checkPendingModerations()
+      .then(() => sendResponse({ success: true }))
+      .catch(err => sendResponse({ success: false, error: String(err) }));
+    return true;
   }
 
   if (message.type === 'FULL_SYNC') {
@@ -1252,7 +1360,7 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
 
     // Queue folder operations (parent folders first due to breadth-first collection)
     for (const folder of foldersToSync) {
-      client.queueOperation({
+      await client.queueOperation({
         id: crypto.randomUUID(),
         opType: 'ADD',
         bookmarkId: folder.node.id,
@@ -1271,13 +1379,13 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
     }
 
     // Second pass: collect all bookmarks with their folder paths
-    function processBookmarks(node: chrome.bookmarks.BookmarkTreeNode): void {
+    async function processBookmarks(node: chrome.bookmarks.BookmarkTreeNode): Promise<void> {
       if (node.url) {
         // Get folder info for the parent
         const folderType = node.parentId ? (folderTypeMap.get(node.parentId) || 'unknown') : 'unknown';
         const folderPath = node.parentId ? folderPathMap.get(node.parentId) : undefined;
 
-        client.queueOperation({
+        await client.queueOperation({
           id: crypto.randomUUID(),
           opType: 'ADD',
           bookmarkId: node.id,
@@ -1298,13 +1406,13 @@ async function performFullSync(): Promise<{ success: boolean; count: number; err
       // Process children
       if (node.children) {
         for (const child of node.children) {
-          processBookmarks(child);
+          await processBookmarks(child);
         }
       }
     }
 
     for (const rootNode of tree) {
-      processBookmarks(rootNode);
+      await processBookmarks(rootNode);
     }
 
     console.log(`[BMaestro] Queued ${folderCount} folders and ${bookmarkCount} bookmarks for sync`);

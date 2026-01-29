@@ -63,6 +63,34 @@ async function init(): Promise<void> {
       console.error('[Popup] Failed to load config:', err);
     }
 
+    // Show alert banner if there's a badge reason, then clear badge
+    const alertBanner = document.getElementById('alertBanner');
+    const alertText = document.getElementById('alertText');
+    const dismissAlert = document.getElementById('dismissAlert');
+
+    try {
+      const { badgeReason, badgeType } = await chrome.storage.local.get(['badgeReason', 'badgeType']);
+      if (badgeReason && alertBanner && alertText) {
+        alertText.textContent = badgeReason;
+        alertBanner.classList.remove('hidden');
+        if (badgeType === 'error') {
+          alertBanner.classList.add('error');
+        }
+        // Clear the badge since user has now seen it
+        chrome.action.setBadgeText({ text: '' });
+        await chrome.storage.local.remove(['badgeReason', 'badgeType']);
+      }
+    } catch (err) {
+      console.error('[Popup] Failed to check badge status:', err);
+    }
+
+    // Dismiss alert button
+    if (dismissAlert && alertBanner) {
+      dismissAlert.addEventListener('click', () => {
+        alertBanner.classList.add('hidden');
+      });
+    }
+
     // Canonical toggle
     const canonicalToggle = document.getElementById('canonicalToggle') as HTMLInputElement | null;
     if (canonicalToggle) {
@@ -907,13 +935,28 @@ async function init(): Promise<void> {
     if (updateBanner && newVersionEl) {
       fetch(CLOUD_CONFIG.versionUrl)
         .then(res => res.json())
-        .then(data => {
+        .then(async data => {
           if (data.version && data.version !== EXTENSION_VERSION) {
             newVersionEl.textContent = `v${data.version}`;
             updateBanner.classList.remove('hidden');
             if (menuVersionEl) {
               menuVersionEl.textContent = `v${EXTENSION_VERSION} (${data.version} available)`;
               menuVersionEl.classList.add('has-update');
+            }
+          } else {
+            // Versions match - clear any stale update data
+            updateBanner.classList.add('hidden');
+            if (menuVersionEl) {
+              menuVersionEl.textContent = `v${EXTENSION_VERSION}`;
+              menuVersionEl.classList.remove('has-update');
+            }
+            // Clear stale storage and badge
+            await chrome.storage.local.remove(['updateAvailable', 'latestVersion', 'lastUpdateDownload']);
+            // Only clear badge if no pending moderations
+            const { pendingModerationCount, badgeType } = await chrome.storage.local.get(['pendingModerationCount', 'badgeType']);
+            if (badgeType === 'update' || (!pendingModerationCount || pendingModerationCount === 0)) {
+              await chrome.storage.local.remove(['badgeReason', 'badgeType']);
+              chrome.action.setBadgeText({ text: '' });
             }
           }
         })

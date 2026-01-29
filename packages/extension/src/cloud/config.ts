@@ -10,7 +10,7 @@ export const CLOUD_CONFIG = {
 };
 
 // Current extension version - must match manifest.json
-export const EXTENSION_VERSION = '1.10.29';
+export const EXTENSION_VERSION = '1.10.33';
 
 export interface StoredConfig {
   syncSecret: string;
@@ -34,7 +34,8 @@ export async function getConfig(): Promise<StoredConfig> {
   return {
     syncSecret: result.syncSecret || '',
     userId: result.userId || '',
-    deviceId: result.deviceId || `device-${crypto.randomUUID().slice(0, 8)}`,
+    // Don't generate default here - let initialize() handle it so it gets persisted
+    deviceId: result.deviceId || '',
     pollIntervalMinutes: result.pollIntervalMinutes || CLOUD_CONFIG.defaultPollIntervalMinutes,
     lastSyncVersion: result.lastSyncVersion || 0,
     lastSyncTime: result.lastSyncTime || null,

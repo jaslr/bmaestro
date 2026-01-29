@@ -360,6 +360,49 @@ h1 {
   display: none;
 }
 
+/* Alert Banner */
+.alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-surface);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-left: 3px solid var(--amber);
+}
+
+.alert-banner.hidden {
+  display: none;
+}
+
+.alert-banner.error {
+  border-left-color: #ff4444;
+}
+
+#alertText {
+  font-size: 11px;
+  color: var(--amber);
+  flex: 1;
+}
+
+.alert-banner.error #alertText {
+  color: #ff4444;
+}
+
+.dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 0 0 8px;
+  line-height: 1;
+}
+
+.dismiss-btn:hover {
+  color: var(--text-primary);
+}
+
 /* Status Section */
 h2 {
   font-size: 10px;
