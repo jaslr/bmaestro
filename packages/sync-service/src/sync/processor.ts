@@ -14,6 +14,7 @@ export interface SyncResponse {
   success: boolean;
   operations: SyncOperation[];
   lastSyncVersion: number;
+  serverEmpty?: boolean;  // True when server has no operations - signals client should do full export
   conflicts?: Array<{
     localOp: SyncOperation;
     remoteOp: SyncOperation;
@@ -23,6 +24,12 @@ export interface SyncResponse {
 
 export async function processSyncRequest(req: SyncRequest): Promise<SyncResponse> {
   const { userId, deviceId, browserType, operations, lastSyncVersion } = req;
+
+  // Check if server has any operations at all for this user
+  const totalOpsResult = await pb.collection('sync_operations').getList(1, 1, {
+    filter: `user_id = "${userId}"`,
+  });
+  const serverEmpty = totalOpsResult.totalItems === 0;
 
   // 1. Get operations from other devices since lastSyncVersion
   const pendingOps = await pb.collection('sync_operations').getFullList({
@@ -152,6 +159,7 @@ export async function processSyncRequest(req: SyncRequest): Promise<SyncResponse
     success: true,
     operations: opsToApply,
     lastSyncVersion: newVersion,
+    serverEmpty: serverEmpty || undefined,  // Only include if true
     conflicts: conflicts.length > 0 ? conflicts : undefined,
   };
 }

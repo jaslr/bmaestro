@@ -12,6 +12,7 @@ export interface SyncResult {
   success: boolean;
   operations: SyncOperation[];
   lastSyncVersion: number;
+  serverEmpty?: boolean;  // Server has no operations - canonical should do full export
   conflicts?: Array<{
     localOp: SyncOperation;
     remoteOp: SyncOperation;
@@ -150,6 +151,11 @@ export class CloudClient {
       }
 
       const result: SyncResult = await response.json();
+
+      // Log if server is empty (needs full export from canonical)
+      if (result.serverEmpty) {
+        console.log('[Cloud] Server is empty - canonical browser should do full export');
+      }
 
       // Clear pending operations that were sent (from memory AND storage)
       await this.clearPendingOperations();

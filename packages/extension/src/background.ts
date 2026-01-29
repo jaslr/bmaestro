@@ -252,10 +252,27 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
     console.log('[BMaestro] Alarm triggered, syncing and checking updates...');
 
-    // Sync bookmarks
-    client.sync().catch(err => {
+    // Sync bookmarks with auto-recovery for empty server
+    try {
+      const syncResult = await client.sync();
+
+      // Auto-recovery: If server is empty and we're canonical, do full export
+      if (syncResult.serverEmpty) {
+        const { isCanonical } = await chrome.storage.local.get('isCanonical');
+        if (isCanonical) {
+          console.log('[BMaestro] 🔄 AUTO-RECOVERY: Server empty, triggering full export as canonical browser');
+          // Import fullSync function dynamically to avoid circular dependency issues
+          const fullSyncResult = await performFullSync();
+          console.log('[BMaestro] 🔄 AUTO-RECOVERY complete:', fullSyncResult);
+        } else {
+          console.log('[BMaestro] 🔄 Server empty - waiting for canonical browser to export');
+          // For non-canonical browsers, reset lastSyncVersion to 0 to receive future operations
+          await chrome.storage.local.set({ lastSyncVersion: 0 });
+        }
+      }
+    } catch (err) {
       console.error('[BMaestro] Sync failed:', err);
-    });
+    }
 
     // Check for pending moderation items (sets badge if any pending)
     await checkPendingModerations();
