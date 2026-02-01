@@ -602,5 +602,385 @@ export async function handleHttpRequest(
     return true;
   }
 
+  // ===== DIAGNOSTIC ENDPOINTS =====
+
+  // GET /devices/feed - Per-browser/device activity feed
+  if (path === '/devices/feed' && method === 'GET') {
+    try {
+      const { pb } = await import('../pocketbase.js');
+
+      const browser = url.searchParams.get('browser') || undefined;
+      const device = url.searchParams.get('device') || undefined;
+      const actionsParam = url.searchParams.get('actions') || undefined;
+      const rawLimit = parseInt(url.searchParams.get('limit') || '100');
+      const limit = Math.min(Math.max(rawLimit, 1), 200);
+
+      const filter: string[] = [`user_id = "${userId}"`];
+      if (browser) filter.push(`browser_type = "${browser}"`);
+      if (device) filter.push(`device_id = "${device}"`);
+      if (actionsParam) {
+        const actions = actionsParam.split(',').map(a => a.trim()).filter(Boolean);
+        if (actions.length > 0) {
+          const actionFilters = actions.map(a => `action = "${a}"`).join(' || ');
+          filter.push(`(${actionFilters})`);
+        }
+      }
+
+      const filterStr = filter.join(' && ');
+
+      const result = await pb.collection('activity_log').getList(1, limit, {
+        filter: filterStr,
+        sort: '-timestamp',
+      });
+
+      const items = result.items.map((item: any) => {
+        let direction: 'outgoing' | 'incoming' = 'outgoing';
+        if (item.action === 'SYNC_COMPLETED' && item.details) {
+          const details = typeof item.details === 'string' ? JSON.parse(item.details) : item.details;
+          if ((details.operationsReceived || 0) > 0 && (details.operationsSent || 0) === 0) {
+            direction = 'incoming';
+          } else if ((details.operationsSent || 0) > 0) {
+            direction = 'outgoing';
+          }
+        }
+
+        return {
+          timestamp: item.timestamp,
+          action: item.action,
+          browser: item.browser_type,
+          device_id: item.device_id,
+          title: item.bookmark_title || null,
+          url: item.bookmark_url || null,
+          details: item.details || null,
+          direction,
+        };
+      });
+
+      json(res, {
+        items,
+        device_id: device || null,
+        browser: browser || null,
+        totalItems: result.totalItems,
+      });
+    } catch (err) {
+      console.error('[Devices/Feed] Error:', err);
+      json(res, { error: 'Failed to fetch device feed', details: String(err) }, 500);
+    }
+    return true;
+  }
+
+  // GET /devices/compare - Compare recent actions between two browsers
+  if (path === '/devices/compare' && method === 'GET') {
+    const browser1 = url.searchParams.get('browser1');
+    const browser2 = url.searchParams.get('browser2');
+    const rawLimit = parseInt(url.searchParams.get('limit') || '100');
+    const limit = Math.min(Math.max(rawLimit, 1), 200);
+
+    if (!browser1 || !browser2) {
+      json(res, { error: 'browser1 and browser2 query params are required' }, 400);
+      return true;
+    }
+
+    try {
+      const { pb } = await import('../pocketbase.js');
+
+      // Helper to build filter - identifier could be browser_type or device_id
+      const buildFilter = (identifier: string) => {
+        const base = `user_id = "${userId}"`;
+        // Try both browser_type and device_id matching
+        return `${base} && (browser_type = "${identifier}" || device_id = "${identifier}")`;
+      };
+
+      // Get all actions for each browser
+      const [result1, result2] = await Promise.all([
+        pb.collection('activity_log').getList(1, limit, {
+          filter: buildFilter(browser1),
+          sort: '-timestamp',
+        }),
+        pb.collection('activity_log').getList(1, limit, {
+          filter: buildFilter(browser2),
+          sort: '-timestamp',
+        }),
+      ]);
+
+      // Find last sync for each
+      const findLastSync = (items: any[]) => {
+        const sync = items.find((i: any) => i.action === 'SYNC_COMPLETED');
+        return sync?.timestamp || null;
+      };
+
+      // Filter to bookmark actions only (not SYNC_COMPLETED)
+      const bookmarkActions = (items: any[]) =>
+        items.filter((i: any) => i.action?.startsWith('BOOKMARK_'));
+
+      const b1BookmarkActions = bookmarkActions(result1.items);
+      const b2BookmarkActions = bookmarkActions(result2.items);
+
+      // Build URL sets for discrepancy detection
+      const b1Adds = new Map<string, any>();
+      const b2Adds = new Map<string, any>();
+      const b1Deletes = new Set<string>();
+      const b2Deletes = new Set<string>();
+
+      for (const item of b1BookmarkActions) {
+        if (item.action === 'BOOKMARK_ADDED' && item.bookmark_url) {
+          b1Adds.set(item.bookmark_url, item);
+        } else if (item.action === 'BOOKMARK_DELETED' && item.bookmark_url) {
+          b1Deletes.add(item.bookmark_url);
+        }
+      }
+      for (const item of b2BookmarkActions) {
+        if (item.action === 'BOOKMARK_ADDED' && item.bookmark_url) {
+          b2Adds.set(item.bookmark_url, item);
+        } else if (item.action === 'BOOKMARK_DELETED' && item.bookmark_url) {
+          b2Deletes.add(item.bookmark_url);
+        }
+      }
+
+      const discrepancies: any[] = [];
+
+      // URLs added in browser1 but not in browser2
+      for (const [urlStr, item] of b1Adds) {
+        if (!b2Adds.has(urlStr)) {
+          discrepancies.push({
+            type: 'missing_in_browser2',
+            action: 'BOOKMARK_ADDED',
+            title: item.bookmark_title || null,
+            url: urlStr,
+            source_browser: browser1,
+            timestamp: item.timestamp,
+          });
+        }
+      }
+
+      // URLs added in browser2 but not in browser1
+      for (const [urlStr, item] of b2Adds) {
+        if (!b1Adds.has(urlStr)) {
+          discrepancies.push({
+            type: 'missing_in_browser1',
+            action: 'BOOKMARK_ADDED',
+            title: item.bookmark_title || null,
+            url: urlStr,
+            source_browser: browser2,
+            timestamp: item.timestamp,
+          });
+        }
+      }
+
+      // Deletes in browser1 not in browser2
+      for (const urlStr of b1Deletes) {
+        if (!b2Deletes.has(urlStr)) {
+          discrepancies.push({
+            type: 'missing_in_browser2',
+            action: 'BOOKMARK_DELETED',
+            url: urlStr,
+            source_browser: browser1,
+          });
+        }
+      }
+
+      // Deletes in browser2 not in browser1
+      for (const urlStr of b2Deletes) {
+        if (!b1Deletes.has(urlStr)) {
+          discrepancies.push({
+            type: 'missing_in_browser1',
+            action: 'BOOKMARK_DELETED',
+            url: urlStr,
+            source_browser: browser2,
+          });
+        }
+      }
+
+      const formatActions = (items: any[]) =>
+        items.map((i: any) => ({
+          timestamp: i.timestamp,
+          action: i.action,
+          title: i.bookmark_title || null,
+          url: i.bookmark_url || null,
+          device_id: i.device_id,
+        }));
+
+      const b1MissingCount = discrepancies.filter(d => d.type === 'missing_in_browser2').length;
+      const b2MissingCount = discrepancies.filter(d => d.type === 'missing_in_browser1').length;
+      let summary = `${browser1} has ${result1.totalItems} actions, ${browser2} has ${result2.totalItems}.`;
+      if (b1MissingCount > 0) {
+        summary += ` ${b1MissingCount} bookmark actions from ${browser1} are not mirrored in ${browser2}.`;
+      }
+      if (b2MissingCount > 0) {
+        summary += ` ${b2MissingCount} bookmark actions from ${browser2} are not mirrored in ${browser1}.`;
+      }
+      if (b1MissingCount === 0 && b2MissingCount === 0) {
+        summary += ' No discrepancies found.';
+      }
+
+      json(res, {
+        browser1: {
+          identifier: browser1,
+          lastSync: findLastSync(result1.items),
+          totalActions: result1.totalItems,
+          recentActions: formatActions(b1BookmarkActions),
+        },
+        browser2: {
+          identifier: browser2,
+          lastSync: findLastSync(result2.items),
+          totalActions: result2.totalItems,
+          recentActions: formatActions(b2BookmarkActions),
+        },
+        discrepancies,
+        summary,
+      });
+    } catch (err) {
+      console.error('[Devices/Compare] Error:', err);
+      json(res, { error: 'Failed to compare devices', details: String(err) }, 500);
+    }
+    return true;
+  }
+
+  // GET /devices/errors - Recent errors and failures
+  if (path === '/devices/errors' && method === 'GET') {
+    try {
+      const { pb } = await import('../pocketbase.js');
+
+      const rawLimit = parseInt(url.searchParams.get('limit') || '50');
+      const limit = Math.min(Math.max(rawLimit, 1), 200);
+      const browser = url.searchParams.get('browser') || undefined;
+
+      // Filter for error-like actions
+      const errorPatterns = ['FAIL', 'ERROR', 'CONFLICT'];
+      const actionFilters = errorPatterns.map(p => `action ~ "${p}"`).join(' || ');
+
+      const filter: string[] = [`user_id = "${userId}"`, `(${actionFilters})`];
+      if (browser) filter.push(`browser_type = "${browser}"`);
+
+      const filterStr = filter.join(' && ');
+
+      const result = await pb.collection('activity_log').getList(1, limit, {
+        filter: filterStr,
+        sort: '-timestamp',
+      });
+
+      // Build summary
+      const byBrowser: Record<string, number> = { chrome: 0, brave: 0, edge: 0 };
+      const byAction: Record<string, number> = {};
+
+      for (const item of result.items) {
+        const bt = (item as any).browser_type || 'unknown';
+        if (bt in byBrowser) byBrowser[bt]++;
+        const action = (item as any).action || 'UNKNOWN';
+        byAction[action] = (byAction[action] || 0) + 1;
+      }
+
+      const items = result.items.map((item: any) => {
+        const details = item.details || {};
+        return {
+          timestamp: item.timestamp,
+          browser: item.browser_type,
+          device_id: item.device_id,
+          action: item.action,
+          error: details.error || details.message || item.bookmark_title || null,
+          details,
+        };
+      });
+
+      json(res, {
+        items,
+        summary: {
+          totalErrors: result.totalItems,
+          byBrowser,
+          byAction,
+        },
+      });
+    } catch (err) {
+      console.error('[Devices/Errors] Error:', err);
+      json(res, { error: 'Failed to fetch errors', details: String(err) }, 500);
+    }
+    return true;
+  }
+
+  // GET /devices/status - Overview of all known devices for user
+  if (path === '/devices/status' && method === 'GET') {
+    try {
+      const { pb } = await import('../pocketbase.js');
+
+      // Get all activity for this user to discover devices
+      // We fetch a large batch sorted by timestamp descending to find unique devices
+      const allActivity = await pb.collection('activity_log').getList(1, 500, {
+        filter: `user_id = "${userId}"`,
+        sort: '-timestamp',
+      });
+
+      // Build device map
+      const deviceMap = new Map<string, {
+        device_id: string;
+        browser: string;
+        lastActivity: string;
+        lastSync: string | null;
+        actionCount: number;
+        recentBookmarkActions: number;
+        lastBookmarkAction: any | null;
+      }>();
+
+      for (const item of allActivity.items) {
+        const record = item as any;
+        const deviceId = record.device_id;
+        if (!deviceId || deviceId === 'system' || deviceId === 'moderation' || deviceId === 'moderation-accepted' || deviceId === 'moderation-reversal') continue;
+
+        if (!deviceMap.has(deviceId)) {
+          deviceMap.set(deviceId, {
+            device_id: deviceId,
+            browser: record.browser_type || 'unknown',
+            lastActivity: record.timestamp,
+            lastSync: null,
+            actionCount: 0,
+            recentBookmarkActions: 0,
+            lastBookmarkAction: null,
+          });
+        }
+
+        const dev = deviceMap.get(deviceId)!;
+        dev.actionCount++;
+
+        if (record.action === 'SYNC_COMPLETED' && !dev.lastSync) {
+          dev.lastSync = record.timestamp;
+        }
+
+        if (record.action?.startsWith('BOOKMARK_')) {
+          dev.recentBookmarkActions++;
+          if (!dev.lastBookmarkAction) {
+            dev.lastBookmarkAction = {
+              action: record.action,
+              title: record.bookmark_title || null,
+              timestamp: record.timestamp,
+            };
+          }
+        }
+      }
+
+      // Get canonical browser
+      const canonical = getCanonicalBrowser(userId);
+
+      // Get total server operations
+      let serverOperations = 0;
+      try {
+        const opsResult = await pb.collection('sync_operations').getList(1, 1, {
+          filter: `user_id = "${userId}"`,
+        });
+        serverOperations = opsResult.totalItems;
+      } catch {
+        // sync_operations might not exist or be empty
+      }
+
+      json(res, {
+        devices: Array.from(deviceMap.values()),
+        canonical: canonical || null,
+        serverOperations,
+      });
+    } catch (err) {
+      console.error('[Devices/Status] Error:', err);
+      json(res, { error: 'Failed to fetch device status', details: String(err) }, 500);
+    }
+    return true;
+  }
+
   return false; // Not handled, let WebSocket handle
 }

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "bmaestro-diagnostics": {
+      "command": "node",
+      "args": ["/home/chip/bmaestro/packages/mcp-server/dist/index.js"],
+      "env": {
+        "BMAESTRO_SYNC_SECRET": "12d203c78e15efe1780bba1bc26aa2faf03f880915989b227d0938810a398b68",
+        "BMAESTRO_USER_ID": "chip"
+      }
+    }
+  }
+}
