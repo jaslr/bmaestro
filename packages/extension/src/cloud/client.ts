@@ -100,6 +100,14 @@ export class CloudClient {
   // Refresh config from storage (call after user saves new credentials)
   async refreshConfig(): Promise<void> {
     this.config = await getConfig();
+
+    // Ensure deviceId is always set (survives service worker restarts)
+    if (!this.config.deviceId) {
+      this.config.deviceId = `device-${crypto.randomUUID().slice(0, 8)}`;
+      await saveConfig({ deviceId: this.config.deviceId });
+      console.log('[Cloud] Generated and saved device ID in refreshConfig:', this.config.deviceId);
+    }
+
     console.log('[Cloud] Config refreshed, configured:', this.isConfigured());
   }
 
