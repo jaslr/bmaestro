@@ -321,7 +321,7 @@ export async function handleHttpRequest(
     const body = await parseBody(req);
     const operationType: OperationType = body.operationType || 'DELETE';
 
-    const pending = queueOperation(userId, {
+    const pending = await queueOperation(userId, {
       browser: body.browser || 'unknown',
       operationType,
       url: body.url,
@@ -340,7 +340,7 @@ export async function handleHttpRequest(
 
   // GET /moderation/pending - Get pending operations
   if (path === '/moderation/pending' && method === 'GET') {
-    const items = getPendingOperations(userId);
+    const items = await getPendingOperations(userId);
     json(res, { items });
     return true;
   }
@@ -348,7 +348,7 @@ export async function handleHttpRequest(
   // POST /moderation/:id/accept - Accept an operation
   if (path.match(/^\/moderation\/[^/]+\/accept$/) && method === 'POST') {
     const id = path.split('/')[2];
-    const accepted = acceptOperation(userId, id);
+    const accepted = await acceptOperation(userId, id);
 
     if (!accepted) {
       json(res, { error: 'Operation not found' }, 404);
@@ -439,7 +439,7 @@ export async function handleHttpRequest(
   // POST /moderation/:id/reject - Reject an operation
   if (path.match(/^\/moderation\/[^/]+\/reject$/) && method === 'POST') {
     const id = path.split('/')[2];
-    const rejected = rejectOperation(userId, id);
+    const rejected = await rejectOperation(userId, id);
 
     if (!rejected) {
       json(res, { error: 'Operation not found' }, 404);
@@ -498,7 +498,7 @@ export async function handleHttpRequest(
 
   // POST /moderation/accept-all - Accept all pending operations
   if (path === '/moderation/accept-all' && method === 'POST') {
-    const accepted = acceptAllOperations(userId);
+    const accepted = await acceptAllOperations(userId);
 
     const actionMap: Record<OperationType, string> = {
       'ADD': 'BOOKMARK_ADD',
@@ -550,7 +550,7 @@ export async function handleHttpRequest(
 
   // POST /moderation/reject-all - Reject all pending operations
   if (path === '/moderation/reject-all' && method === 'POST') {
-    const rejected = rejectAllOperations(userId);
+    const rejected = await rejectAllOperations(userId);
 
     // Queue reversal operations for all rejected items
     try {

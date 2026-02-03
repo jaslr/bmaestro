@@ -1,5 +1,7 @@
 // Moderation module for all bookmark operations from non-canonical browsers
-// Stores pending operations that require approval from the source of truth
+// Stores pending operations in PocketBase for persistence across service restarts
+
+import { pb } from '../pocketbase.js';
 
 export type OperationType = 'ADD' | 'UPDATE' | 'DELETE';
 
@@ -19,129 +21,196 @@ export interface PendingOperation {
   timestamp: string;
 }
 
-// In-memory store (per user)
-const pendingOperations = new Map<string, PendingOperation[]>();
-
-// Canonical browser status (per user)
+// Canonical browser status (per user) - this can stay in-memory as it's less critical
 const canonicalBrowsers = new Map<string, string | null>();
 
-export function queueOperation(
+export async function queueOperation(
   userId: string,
   operation: Omit<PendingOperation, 'id' | 'userId' | 'timestamp'>
-): PendingOperation {
-  const pending = pendingOperations.get(userId) || [];
+): Promise<PendingOperation> {
+  try {
+    // Check if already queued (same URL and operation type)
+    if (operation.url) {
+      const existing = await pb.collection('pending_moderations').getList(1, 1, {
+        filter: `user_id='${userId}'&&url='${operation.url}'&&operation_type='${operation.operationType}'&&status='pending'`,
+      });
 
-  // Check if already queued (same URL and operation type)
-  // For ADD/DELETE: check by URL
-  // For UPDATE: check by URL (only one pending update per URL)
-  if (operation.url) {
-    const existing = pending.find(
-      p => p.url === operation.url && p.operationType === operation.operationType
-    );
-    if (existing) {
-      // For UPDATE, merge with latest values
-      if (operation.operationType === 'UPDATE') {
-        existing.title = operation.title;
-        existing.previousTitle = existing.previousTitle || operation.previousTitle;
-        existing.previousUrl = existing.previousUrl || operation.previousUrl;
+      if (existing.items.length > 0) {
+        const item = existing.items[0];
+        // For UPDATE, merge with latest values
+        if (operation.operationType === 'UPDATE') {
+          await pb.collection('pending_moderations').update(item.id, {
+            title: operation.title,
+          });
+        }
+        return mapRecordToOperation(item);
       }
-      return existing;
     }
+
+    // Create new pending operation
+    const record = await pb.collection('pending_moderations').create({
+      user_id: userId,
+      browser: operation.browser,
+      operation_type: operation.operationType,
+      url: operation.url || '',
+      title: operation.title || '',
+      folder_path: operation.folderPath || '',
+      parent_id: operation.parentId || '',
+      previous_title: operation.previousTitle || '',
+      previous_url: operation.previousUrl || '',
+      previous_parent_id: operation.previousParentId || '',
+      status: 'pending',
+    });
+
+    console.log(`[Moderation] Queued ${operation.operationType} for ${userId}: ${operation.title || operation.url}`);
+    return mapRecordToOperation(record);
+  } catch (err) {
+    console.error('[Moderation] Failed to queue operation:', err);
+    throw err;
   }
+}
 
-  const newOperation: PendingOperation = {
-    id: crypto.randomUUID(),
-    userId,
-    ...operation,
-    timestamp: new Date().toISOString(),
+// Map PocketBase record to PendingOperation interface
+function mapRecordToOperation(record: any): PendingOperation {
+  return {
+    id: record.id,
+    userId: record.user_id,
+    browser: record.browser,
+    operationType: record.operation_type as OperationType,
+    url: record.url || undefined,
+    title: record.title,
+    folderPath: record.folder_path || undefined,
+    parentId: record.parent_id || undefined,
+    previousTitle: record.previous_title || undefined,
+    previousUrl: record.previous_url || undefined,
+    previousParentId: record.previous_parent_id || undefined,
+    timestamp: record.created,
   };
-
-  pending.push(newOperation);
-  pendingOperations.set(userId, pending);
-
-  console.log(`[Moderation] Queued ${operation.operationType} for ${userId}: ${operation.title || operation.url}`);
-  return newOperation;
 }
 
 // Legacy function for backwards compatibility
-export function queueDeletion(
+export async function queueDeletion(
   userId: string,
   deletion: { browser: string; url: string; title: string; parentId?: string }
-): PendingOperation {
+): Promise<PendingOperation> {
   return queueOperation(userId, {
     ...deletion,
     operationType: 'DELETE',
   });
 }
 
-export function getPendingOperations(userId: string): PendingOperation[] {
-  return pendingOperations.get(userId) || [];
+export async function getPendingOperations(userId: string): Promise<PendingOperation[]> {
+  try {
+    const result = await pb.collection('pending_moderations').getFullList({
+      filter: `user_id='${userId}'&&status='pending'`,
+    });
+    return result.map(mapRecordToOperation);
+  } catch (err) {
+    console.error('[Moderation] Failed to get pending operations:', err);
+    return [];
+  }
 }
 
 // Legacy alias
-export function getPendingDeletions(userId: string): PendingOperation[] {
+export async function getPendingDeletions(userId: string): Promise<PendingOperation[]> {
   return getPendingOperations(userId);
 }
 
-export function acceptOperation(userId: string, operationId: string): PendingOperation | null {
-  const pending = pendingOperations.get(userId) || [];
-  const index = pending.findIndex(p => p.id === operationId);
+export async function acceptOperation(userId: string, operationId: string): Promise<PendingOperation | null> {
+  try {
+    const record = await pb.collection('pending_moderations').getOne(operationId);
 
-  if (index === -1) return null;
+    if (record.user_id !== userId || record.status !== 'pending') {
+      return null;
+    }
 
-  const [accepted] = pending.splice(index, 1);
-  pendingOperations.set(userId, pending);
+    // Mark as accepted
+    await pb.collection('pending_moderations').update(operationId, {
+      status: 'accepted',
+    });
 
-  console.log(`[Moderation] Accepted ${accepted.operationType} for ${userId}: ${accepted.title || accepted.url}`);
-  return accepted;
+    console.log(`[Moderation] Accepted ${record.operation_type} for ${userId}: ${record.title || record.url}`);
+    return mapRecordToOperation(record);
+  } catch (err) {
+    console.error('[Moderation] Failed to accept operation:', err);
+    return null;
+  }
 }
 
 // Legacy alias
-export function acceptDeletion(userId: string, deletionId: string): PendingOperation | null {
+export async function acceptDeletion(userId: string, deletionId: string): Promise<PendingOperation | null> {
   return acceptOperation(userId, deletionId);
 }
 
-export function rejectOperation(userId: string, operationId: string): PendingOperation | null {
-  const pending = pendingOperations.get(userId) || [];
-  const index = pending.findIndex(p => p.id === operationId);
+export async function rejectOperation(userId: string, operationId: string): Promise<PendingOperation | null> {
+  try {
+    const record = await pb.collection('pending_moderations').getOne(operationId);
 
-  if (index === -1) return null;
+    if (record.user_id !== userId || record.status !== 'pending') {
+      return null;
+    }
 
-  const [rejected] = pending.splice(index, 1);
-  pendingOperations.set(userId, pending);
+    // Mark as rejected
+    await pb.collection('pending_moderations').update(operationId, {
+      status: 'rejected',
+    });
 
-  console.log(`[Moderation] Rejected ${rejected.operationType} for ${userId}: ${rejected.title || rejected.url}`);
-  return rejected;
+    console.log(`[Moderation] Rejected ${record.operation_type} for ${userId}: ${record.title || record.url}`);
+    return mapRecordToOperation(record);
+  } catch (err) {
+    console.error('[Moderation] Failed to reject operation:', err);
+    return null;
+  }
 }
 
 // Legacy alias
-export function rejectDeletion(userId: string, deletionId: string): PendingOperation | null {
+export async function rejectDeletion(userId: string, deletionId: string): Promise<PendingOperation | null> {
   return rejectOperation(userId, deletionId);
 }
 
-export function acceptAllOperations(userId: string): PendingOperation[] {
-  const pending = pendingOperations.get(userId) || [];
-  pendingOperations.set(userId, []);
+export async function acceptAllOperations(userId: string): Promise<PendingOperation[]> {
+  try {
+    const pending = await getPendingOperations(userId);
 
-  console.log(`[Moderation] Accepted all ${pending.length} operations for ${userId}`);
-  return pending;
+    for (const op of pending) {
+      await pb.collection('pending_moderations').update(op.id, {
+        status: 'accepted',
+      });
+    }
+
+    console.log(`[Moderation] Accepted all ${pending.length} operations for ${userId}`);
+    return pending;
+  } catch (err) {
+    console.error('[Moderation] Failed to accept all operations:', err);
+    return [];
+  }
 }
 
 // Legacy alias
-export function acceptAllDeletions(userId: string): PendingOperation[] {
+export async function acceptAllDeletions(userId: string): Promise<PendingOperation[]> {
   return acceptAllOperations(userId);
 }
 
-export function rejectAllOperations(userId: string): PendingOperation[] {
-  const pending = pendingOperations.get(userId) || [];
-  pendingOperations.set(userId, []);
+export async function rejectAllOperations(userId: string): Promise<PendingOperation[]> {
+  try {
+    const pending = await getPendingOperations(userId);
 
-  console.log(`[Moderation] Rejected all ${pending.length} operations for ${userId}`);
-  return pending;
+    for (const op of pending) {
+      await pb.collection('pending_moderations').update(op.id, {
+        status: 'rejected',
+      });
+    }
+
+    console.log(`[Moderation] Rejected all ${pending.length} operations for ${userId}`);
+    return pending;
+  } catch (err) {
+    console.error('[Moderation] Failed to reject all operations:', err);
+    return [];
+  }
 }
 
 // Legacy alias
-export function rejectAllDeletions(userId: string): PendingOperation[] {
+export async function rejectAllDeletions(userId: string): Promise<PendingOperation[]> {
   return rejectAllOperations(userId);
 }
 
